@@ -51,19 +51,9 @@ RefSense.Plugin = {
     
     // Show startup notification
     showStartupNotification() {
-        try {
-            setTimeout(() => {
-                if (typeof Zotero !== 'undefined' && Zotero.alert) {
-                    Zotero.alert(
-                        null, 
-                        'RefSense Plugin Loaded', 
-                        'RefSense AI Metadata Extractor has been loaded successfully!\n\nThe plugin will add functionality to PDF readers.'
-                    );
-                }
-            }, 2000);
-        } catch (error) {
-            this.log('Could not show startup notification:', error.message);
-        }
+        // Notification disabled for better user experience
+        // Plugin functionality is indicated by the button in PDF reader
+        this.log('RefSense plugin loaded successfully');
     },
     
     // Plugin shutdown
@@ -286,21 +276,160 @@ RefSense.Plugin = {
         try {
             this.log('Setting up toolbar for reader:', reader.itemID);
             
-            // Use Zotero's overlay system instead of direct DOM manipulation
-            // This avoids interfering with PDF.js
-            this.log('Setting up toolbar using Zotero overlay system...');
-            
             // Check if button already exists
             if (reader._refsenseButtonAdded) {
                 this.log('Button already exists for this reader');
                 return;
             }
             
-            // Use Zotero's menu system instead of direct DOM manipulation
+            // Try multiple approaches for adding toolbar button
+            this.addReaderToolbarButton(reader);
             this.addReaderMenuItem(reader);
             
         } catch (error) {
             this.handleError(error, 'setupReaderToolbar');
+        }
+    },
+    
+    // Add toolbar button to PDF reader
+    addReaderToolbarButton(reader) {
+        try {
+            this.log('Adding toolbar button to reader:', reader.itemID);
+            
+            // Wait for reader window to be fully loaded
+            setTimeout(() => {
+                this.insertToolbarButton(reader);
+            }, 2000);
+            
+        } catch (error) {
+            this.handleError(error, 'addReaderToolbarButton');
+        }
+    },
+    
+    // Insert the actual toolbar button
+    insertToolbarButton(reader) {
+        try {
+            this.log('Starting button insertion for reader:', reader.itemID);
+            
+            // Wait for reader to be fully initialized and use a simpler approach
+            const tryInsertButton = () => {
+                try {
+                    // Use a much simpler approach - just add to any available window/iframe
+                    let targetDoc = null;
+                    let targetWindow = null;
+                    
+                    // Try to find the PDF viewer iframe or window
+                    if (reader._iframeWindow && reader._iframeWindow.document) {
+                        targetWindow = reader._iframeWindow;
+                        targetDoc = reader._iframeWindow.document;
+                        this.log('Using iframe window/document');
+                    } else if (reader._window && reader._window.document && reader._window !== globalThis) {
+                        targetWindow = reader._window;
+                        targetDoc = reader._window.document;
+                        this.log('Using reader window/document');
+                    } else {
+                        this.log('Cannot find suitable document, skipping button insertion');
+                        return;
+                    }
+                    
+                    // Simple DOM ready check
+                    if (!targetDoc || !targetDoc.body || targetDoc.readyState === 'loading') {
+                        this.log('Document not ready, retrying...');
+                        setTimeout(tryInsertButton, 1000);
+                        return;
+                    }
+                    
+                    this.log('Document ready, inserting floating button');
+                    this.insertSimpleFloatingButton(targetDoc, targetWindow, reader);
+                    
+                } catch (error) {
+                    this.log('Error in tryInsertButton:', error.message);
+                }
+            };
+            
+            // Start trying to insert button with delays
+            setTimeout(tryInsertButton, 1000);
+            
+        } catch (error) {
+            this.handleError(error, 'insertToolbarButton');
+        }
+    },
+    
+    // Insert a simple floating button that always works
+    insertSimpleFloatingButton(doc, win, reader) {
+        try {
+            this.log('Inserting simple floating button');
+            
+            // Check if button already exists
+            if (doc.querySelector('#refsense-simple-btn')) {
+                this.log('Simple RefSense button already exists');
+                return;
+            }
+            
+            // Create floating button with minimal dependencies
+            const btn = doc.createElement('div');
+            btn.id = 'refsense-simple-btn';
+            btn.textContent = '📄 RefSense';
+            btn.title = 'Extract Metadata (Ctrl+Shift+E)';
+            
+            // Simple but effective styling
+            btn.style.cssText = `
+                position: fixed !important;
+                top: 15px !important;
+                right: 15px !important;
+                background: #4CAF50 !important;
+                color: white !important;
+                padding: 8px 12px !important;
+                border-radius: 20px !important;
+                cursor: pointer !important;
+                font-family: Arial, sans-serif !important;
+                font-size: 12px !important;
+                font-weight: bold !important;
+                z-index: 999999 !important;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+                border: none !important;
+                user-select: none !important;
+                transition: all 0.2s ease !important;
+            `;
+            
+            // Add hover effect
+            btn.onmouseenter = () => {
+                btn.style.background = '#45a049 !important';
+                btn.style.transform = 'scale(1.05)';
+            };
+            btn.onmouseleave = () => {
+                btn.style.background = '#4CAF50 !important';
+                btn.style.transform = 'scale(1)';
+            };
+            
+            // Add click handler
+            btn.onclick = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.log('Simple RefSense button clicked!');
+                this.handleExtractMetadata(reader);
+            };
+            
+            // Insert into document
+            doc.body.appendChild(btn);
+            this.log('Simple floating button inserted successfully');
+            reader._refsenseButtonAdded = true;
+            
+        } catch (error) {
+            this.handleError(error, 'insertSimpleFloatingButton');
+        }
+    },
+    
+    // Simplified toolbar search (keeping for future use)
+    searchForToolbar(doc) {
+        try {
+            this.log('Searching for PDF toolbar in document');
+            
+            // This function is kept for future improvements
+            return null;
+        } catch (error) {
+            this.handleError(error, 'searchForToolbar');
+            return null;
         }
     },
     
@@ -381,21 +510,10 @@ RefSense.Plugin = {
     // Add to Zotero's menu system
     addToZoteroMenu(reader) {
         try {
-            this.log('Adding menu for reader:', reader.itemID);
+            this.log('RefSense activated for reader:', reader.itemID);
             
-            // Create a simple notification that the plugin is active
-            setTimeout(() => {
-                if (typeof Zotero !== 'undefined' && Zotero.alert) {
-                    this.log('Showing RefSense active notification for reader:', reader.itemID);
-                    Zotero.alert(
-                        null, 
-                        'RefSense Active', 
-                        `RefSense is active for this PDF.\nUse Ctrl+Shift+E to extract metadata.\n\nPDF ID: ${reader.itemID}`
-                    );
-                } else {
-                    this.log('Zotero.alert not available');
-                }
-            }, 500);
+            // No popup notification - the floating button provides visual indication
+            // that RefSense is active for this PDF
             
         } catch (error) {
             this.handleError(error, 'addToZoteroMenu');
@@ -415,14 +533,28 @@ RefSense.Plugin = {
             
             this.log('PDF item found:', item.getField('title') || 'Untitled');
             
-            // Show processing message
-            const doc = reader._window.document;
-            const button = doc.querySelector('#refsense-extract-btn');
-            if (button) {
-                const originalHTML = button.innerHTML;
-                button.innerHTML = '<span class="icon">⏳</span><span class="label">Processing...</span>';
-                button.disabled = true;
-                
+            // Show processing message on buttons
+            let targetDoc = null;
+            if (reader._iframeWindow && reader._iframeWindow.document) {
+                targetDoc = reader._iframeWindow.document;
+            } else if (reader._window && reader._window.document) {
+                targetDoc = reader._window.document;
+            }
+            
+            let simpleBtn = null;
+            let originalSimpleText = '';
+            
+            if (targetDoc) {
+                simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
+                if (simpleBtn) {
+                    originalSimpleText = simpleBtn.textContent;
+                    simpleBtn.textContent = '⏳ Processing...';
+                    simpleBtn.style.opacity = '0.7';
+                    simpleBtn.style.pointerEvents = 'none';
+                }
+            }
+            
+            try {
                 // Get PDF context information
                 const pdfContext = await this.getPDFContext(reader, item);
                 
@@ -441,10 +573,14 @@ RefSense.Plugin = {
                 // Show info
                 reader._window.alert(infoMessage);
                 
-                // Restore button
+            } finally {
+                // Restore buttons
                 setTimeout(() => {
-                    button.innerHTML = originalHTML;
-                    button.disabled = false;
+                    if (simpleBtn) {
+                        simpleBtn.textContent = originalSimpleText;
+                        simpleBtn.style.opacity = '1';
+                        simpleBtn.style.pointerEvents = 'auto';
+                    }
                 }, 1000);
             }
             
@@ -456,12 +592,21 @@ RefSense.Plugin = {
                 reader._window.alert(`RefSense Error: ${error.message}`);
             }
             
-            // Restore button on error
-            const doc = reader._window.document;
-            const button = doc.querySelector('#refsense-extract-btn');
-            if (button) {
-                button.innerHTML = '<span class="icon">📄</span><span class="label">Extract Metadata</span>';
-                button.disabled = false;
+            // Restore buttons on error
+            let targetDoc = null;
+            if (reader._iframeWindow && reader._iframeWindow.document) {
+                targetDoc = reader._iframeWindow.document;
+            } else if (reader._window && reader._window.document) {
+                targetDoc = reader._window.document;
+            }
+            
+            if (targetDoc) {
+                const simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
+                if (simpleBtn) {
+                    simpleBtn.textContent = '📄 RefSense';
+                    simpleBtn.style.opacity = '1';
+                    simpleBtn.style.pointerEvents = 'auto';
+                }
             }
         }
     },
@@ -561,16 +706,55 @@ RefSense.Plugin = {
                 
                 for (let reader of readers) {
                     try {
+                        // Try both iframe and window documents
+                        const docs = [];
+                        if (reader._iframeWindow && reader._iframeWindow.document) {
+                            docs.push(reader._iframeWindow.document);
+                        }
                         if (reader._window && reader._window.document) {
-                            const button = reader._window.document.querySelector('#refsense-extract-btn');
-                            if (button) {
-                                button.remove();
-                                this.log('Removed button from reader', reader.itemID);
+                            docs.push(reader._window.document);
+                        }
+                        
+                        for (let doc of docs) {
+                            // Remove simple button
+                            const simpleBtn = doc.querySelector('#refsense-simple-btn');
+                            if (simpleBtn) {
+                                simpleBtn.remove();
+                                this.log('Removed simple button from reader', reader.itemID);
+                            }
+                            
+                            // Remove old style buttons too
+                            const oldBtn = doc.querySelector('#refsense-extract-btn');
+                            if (oldBtn) {
+                                oldBtn.remove();
+                                this.log('Removed old toolbar button from reader', reader.itemID);
+                            }
+                            
+                            const floatingBtn = doc.querySelector('#refsense-floating-btn');
+                            if (floatingBtn) {
+                                floatingBtn.remove();
+                                this.log('Removed floating button from reader', reader.itemID);
                             }
                         }
                     } catch (error) {
-                        this.log('Error cleaning up reader button:', error.message);
+                        this.log('Error cleaning up reader buttons:', error.message);
                     }
+                }
+                
+                // Also clean up any buttons that might have been added to the main window by mistake
+                try {
+                    if (typeof Zotero !== 'undefined' && Zotero.getMainWindow) {
+                        const mainWindow = Zotero.getMainWindow();
+                        if (mainWindow && mainWindow.document) {
+                            const wrongButton = mainWindow.document.querySelector('#refsense-extract-btn');
+                            if (wrongButton) {
+                                wrongButton.remove();
+                                this.log('Removed misplaced button from main window');
+                            }
+                        }
+                    }
+                } catch (error) {
+                    this.log('Error cleaning up main window:', error.message);
                 }
             } catch (error) {
                 this.log('Error accessing readers during cleanup:', error.message);
