@@ -114,69 +114,170 @@ RefSense.Plugin = {
         this.log('Zotero.Reader available, setting up hooks...');
         
         try {
-            // Method 1: Check available Zotero.Reader methods
-            this.log('Available Zotero.Reader methods:', Object.getOwnPropertyNames(Zotero.Reader));
-            
-            // Method 2: Hook into PDF reader creation (if available)
-            if (Zotero.Reader && typeof Zotero.Reader.registerReader === 'function') {
-                this.originalRegisterReader = Zotero.Reader.registerReader;
-                Zotero.Reader.registerReader = (reader) => {
-                    this.log('New reader registered:', reader.itemID);
-                    this.originalRegisterReader(reader);
-                    setTimeout(() => this.setupReaderToolbar(reader), 1000);
-                };
-                this.log('Reader registration hook installed');
-            } else {
-                this.log('Zotero.Reader.registerReader not available');
-            }
-            
-            // Method 3: Monitor for new readers using notifier system
-            try {
-                if (Zotero.Reader && Zotero.Reader._readers) {
-                    // Check existing readers
-                    const readers = Array.from(Zotero.Reader._readers.values() || []);
-                    this.log('Found readers via _readers:', readers.length);
-                    for (let reader of readers) {
-                        this.log('Setting up reader from _readers:', reader.itemID);
-                        setTimeout(() => this.setupReaderToolbar(reader), 500);
-                    }
-                    
-                    // Set up periodic monitoring for new readers
-                    this.readerMonitorInterval = setInterval(() => {
-                        const currentReaders = Array.from(Zotero.Reader._readers.values() || []);
-                        for (let reader of currentReaders) {
-                            if (!reader._refsenseButtonAdded) {
-                                this.log('Found new reader:', reader.itemID);
-                                this.setupReaderToolbar(reader);
+            // Method 1: Use Zotero Notifier system for tab events (PDF readers are opened in tabs)
+            if (Zotero.Notifier) {
+                this.log('Setting up Zotero Notifier for tab events...');
+                
+                const notifierID = Zotero.Notifier.registerObserver({
+                    notify: (event, type, ids, extraData) => {
+                        this.log('Notifier event:', event, 'type:', type, 'ids:', ids);
+                        
+                        // Monitor for tab-related events (PDF readers open in tabs)
+                        if (event === 'add' && type === 'tab') {
+                            this.log('Tab added event detected for IDs:', ids);
+                            for (let id of ids) {
+                                // Check if this tab contains a reader
+                                setTimeout(() => {
+                                    this.checkTabForReader(id, extraData);
+                                }, 1000);
                             }
                         }
-                    }, 2000);
-                    
-                    this.log('Reader monitoring started');
-                } else {
-                    this.log('No method available to get existing readers');
-                }
-            } catch (error) {
-                this.log('Error accessing existing readers:', error.message);
+                        
+                        // Also monitor select events to catch when a reader tab is selected
+                        if (event === 'select' && type === 'tab') {
+                            this.log('Tab selected event detected for IDs:', ids);
+                            for (let id of ids) {
+                                setTimeout(() => {
+                                    this.checkTabForReader(id, extraData);
+                                }, 500);
+                            }
+                        }
+                    }
+                }, ['tab']);
+                
+                this.notifierID = notifierID;
+                this.log('Notifier registered with ID:', notifierID);
             }
             
-            // Method 3: Listen for reader open events (disabled to prevent interference)
-            // if (Zotero.Reader._readers) {
-            //     this.log('Monitoring reader changes...');
-            //     setInterval(() => {
-            //         const currentReaders = Zotero.Reader.getReaders();
-            //         for (let reader of currentReaders) {
-            //             if (!reader._refsenseButtonAdded && reader._window) {
-            //                 this.log('Found new reader to setup:', reader.itemID);
-            //                 this.setupReaderToolbar(reader);
-            //             }
-            //         }
-            //     }, 2000);
-            // }
+            // Method 2: Check available Zotero.Reader methods and properties
+            this.log('Available Zotero.Reader properties:', Object.getOwnPropertyNames(Zotero.Reader));
+            if (Zotero.Reader._readers) {
+                this.log('Zotero.Reader._readers exists, type:', typeof Zotero.Reader._readers);
+            }
             
+            // Method 3: Monitor for new readers using periodic check
+            this.readerMonitorInterval = setInterval(() => {
+                try {
+                    let readers = [];
+                    
+                    if (Zotero.Reader && Zotero.Reader._readers) {
+                        if (typeof Zotero.Reader._readers.values === 'function') {
+                            readers = Array.from(Zotero.Reader._readers.values());
+                        } else if (Array.isArray(Zotero.Reader._readers)) {
+                            readers = Zotero.Reader._readers;
+                        } else {
+                            // Try to access as object
+                            readers = Object.values(Zotero.Reader._readers);
+                        }
+                    }
+                    
+                    for (let reader of readers) {
+                        if (reader && reader.itemID && !reader._refsenseButtonAdded) {
+                            this.log('Found new reader via monitoring:', reader.itemID);
+                            this.setupReaderToolbar(reader);
+                        }
+                    }
+                } catch (error) {
+                    // Silently continue monitoring
+                }
+            }, 3000);
+            
+            this.log('Reader monitoring started');
             this.log('PDF reader button integration setup completed');
+            
         } catch (error) {
             this.handleError(error, 'addPDFReaderButtons');
+        }
+    },
+    
+    // Check if a tab contains a reader and set it up
+    async checkTabForReader(tabID, extraData) {
+        try {
+            this.log('Checking tab for reader:', tabID, 'extraData:', extraData);
+            
+            // Check if this tab is a reader tab
+            if (extraData && extraData[tabID]) {
+                const tabData = extraData[tabID];
+                this.log('Tab data:', tabData);
+                
+                if (tabData.type === 'reader' && tabData.itemID) {
+                    const itemID = tabData.itemID;
+                    this.log('Found reader tab for item:', itemID);
+                    
+                    // Get the reader instance
+                    setTimeout(() => {
+                        this.setupReaderForItem(itemID);
+                    }, 1000);
+                } else {
+                    this.log('Tab is not a reader or missing itemID:', tabData);
+                }
+            } else {
+                // Fallback: try to get reader directly from current readers
+                this.log('No extraData available, checking current readers...');
+                setTimeout(() => {
+                    this.setupCurrentReaders();
+                }, 1000);
+            }
+        } catch (error) {
+            this.handleError(error, 'checkTabForReader');
+        }
+    },
+    
+    // Setup all current readers
+    setupCurrentReaders() {
+        try {
+            this.log('Setting up all current readers...');
+            
+            if (Zotero.Reader && Zotero.Reader._readers) {
+                let readers = [];
+                
+                if (typeof Zotero.Reader._readers.values === 'function') {
+                    readers = Array.from(Zotero.Reader._readers.values());
+                } else if (Array.isArray(Zotero.Reader._readers)) {
+                    readers = Zotero.Reader._readers;
+                } else {
+                    readers = Object.values(Zotero.Reader._readers);
+                }
+                
+                this.log('Found readers:', readers.length);
+                
+                for (let reader of readers) {
+                    if (reader && reader.itemID && !reader._refsenseButtonAdded) {
+                        this.log('Setting up reader:', reader.itemID);
+                        this.setupReaderToolbar(reader);
+                    }
+                }
+            }
+        } catch (error) {
+            this.handleError(error, 'setupCurrentReaders');
+        }
+    },
+    
+    // Setup reader for a specific item ID
+    async setupReaderForItem(itemID) {
+        try {
+            this.log('Setting up reader for item ID:', itemID);
+            
+            // Get the reader instance
+            if (Zotero.Reader && Zotero.Reader._readers) {
+                let readers = [];
+                
+                if (typeof Zotero.Reader._readers.values === 'function') {
+                    readers = Array.from(Zotero.Reader._readers.values());
+                } else {
+                    readers = Object.values(Zotero.Reader._readers);
+                }
+                
+                const reader = readers.find(r => r && r.itemID == itemID);
+                if (reader) {
+                    this.log('Found reader instance for item:', itemID);
+                    this.setupReaderToolbar(reader);
+                } else {
+                    this.log('No reader instance found for item:', itemID);
+                }
+            }
+        } catch (error) {
+            this.handleError(error, 'setupReaderForItem');
         }
     },
     
@@ -235,10 +336,29 @@ RefSense.Plugin = {
         };
         
         try {
-            // Add to main Zotero window
-            if (window && window.document) {
-                window.document.addEventListener('keydown', handleKeydown, true);
-                this.log('Keyboard shortcut added to main window');
+            // Add to main Zotero window (use Zotero's window reference)
+            try {
+                if (typeof Zotero !== 'undefined' && Zotero.getMainWindow) {
+                    const mainWindow = Zotero.getMainWindow();
+                    if (mainWindow && mainWindow.document) {
+                        mainWindow.document.addEventListener('keydown', handleKeydown, true);
+                        this.log('Keyboard shortcut added to main window via Zotero.getMainWindow()');
+                    }
+                } else if (typeof Components !== 'undefined') {
+                    // Fallback using Components
+                    const wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                                        .getService(Components.interfaces.nsIWindowMediator);
+                    const mainWindow = wm.getMostRecentWindow("navigator:browser") || 
+                                     wm.getMostRecentWindow("zotero:main");
+                    if (mainWindow && mainWindow.document) {
+                        mainWindow.document.addEventListener('keydown', handleKeydown, true);
+                        this.log('Keyboard shortcut added to main window via Components');
+                    }
+                } else {
+                    this.log('No method available to access main window');
+                }
+            } catch (winError) {
+                this.log('Could not access main window:', winError.message);
             }
             
             // Add to reader window
@@ -261,16 +381,21 @@ RefSense.Plugin = {
     // Add to Zotero's menu system
     addToZoteroMenu(reader) {
         try {
+            this.log('Adding menu for reader:', reader.itemID);
+            
             // Create a simple notification that the plugin is active
             setTimeout(() => {
                 if (typeof Zotero !== 'undefined' && Zotero.alert) {
+                    this.log('Showing RefSense active notification for reader:', reader.itemID);
                     Zotero.alert(
                         null, 
                         'RefSense Active', 
-                        `RefSense is active for this PDF.\nUse Ctrl+Shift+E to extract metadata.\n\nPDF: ${reader.itemID}`
+                        `RefSense is active for this PDF.\nUse Ctrl+Shift+E to extract metadata.\n\nPDF ID: ${reader.itemID}`
                     );
+                } else {
+                    this.log('Zotero.alert not available');
                 }
-            }, 1000);
+            }, 500);
             
         } catch (error) {
             this.handleError(error, 'addToZoteroMenu');
@@ -416,10 +541,10 @@ RefSense.Plugin = {
                 this.log('Stopped reader monitoring');
             }
             
-            // Restore original reader registration function
-            if (this.originalRegisterReader && Zotero.Reader) {
-                Zotero.Reader.registerReader = this.originalRegisterReader;
-                this.log('Restored original registerReader function');
+            // Unregister notifier
+            if (this.notifierID && Zotero.Notifier) {
+                Zotero.Notifier.unregisterObserver(this.notifierID);
+                this.log('Unregistered notifier:', this.notifierID);
             }
             
             // Try to clean up readers safely
