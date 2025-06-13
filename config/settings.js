@@ -1,20 +1,31 @@
 /**
- * 플러그인 설정 관리 모듈
- * API 키 보안 저장 및 사용자 설정 관리
+ * RefSense 통합 설정 관리 모듈
+ * Zotero 7 호환 설정 시스템
  */
 
 class SettingsManager {
     constructor() {
         this.prefBranch = 'extensions.refsense.';
         this.defaultSettings = {
+            // AI 백엔드 설정
             aiBackend: 'openai', // 'openai' | 'ollama'
+            
+            // OpenAI 설정
             openaiModel: 'gpt-4-turbo',
-            ollamaModel: 'llava:13b',
+            openaiApiKey: '', // Base64 인코딩되어 저장됨
+            
+            // Ollama 설정
+            ollamaModel: 'llama3.2:latest',
             ollamaHost: 'http://localhost:11434',
+            
+            // PDF 추출 설정
             defaultPageSource: 'first', // 'first' | 'current' | 'range'
             pageRange: '1-2',
+            
+            // 기타 설정
             enableLogging: true,
-            maxRetries: 3
+            maxRetries: 3,
+            requestTimeout: 30000 // 30초
         };
     }
 

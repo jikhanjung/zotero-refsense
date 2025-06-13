@@ -1,43 +1,287 @@
-<vbox>
-    <groupbox>
-        <label>RefSense 설정</label>
+<?xml version="1.0"?>
+<vbox xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+    <script>
+        // RefSense 설정 UI 컨트롤러
+        var RefSensePrefs = {
+            init() {
+                this.loadSettings();
+                this.bindEvents();
+            },
+            
+            loadSettings() {
+                try {
+                    // AI 백엔드 설정
+                    const aiBackend = Zotero.Prefs.get('extensions.refsense.aiBackend', 'openai');
+                    document.getElementById('ai-backend').value = aiBackend;
+                    
+                    // OpenAI 설정
+                    const openaiModel = Zotero.Prefs.get('extensions.refsense.openaiModel', 'gpt-4-turbo');
+                    document.getElementById('openai-model').value = openaiModel;
+                    
+                    // Ollama 설정  
+                    const ollamaModel = Zotero.Prefs.get('extensions.refsense.ollamaModel', 'llama3.2:latest');
+                    const ollamaHost = Zotero.Prefs.get('extensions.refsense.ollamaHost', 'http://localhost:11434');
+                    document.getElementById('ollama-model').value = ollamaModel;
+                    document.getElementById('ollama-host').value = ollamaHost;
+                    
+                    // 페이지 추출 설정
+                    const pageSource = Zotero.Prefs.get('extensions.refsense.defaultPageSource', 'first');
+                    const pageRange = Zotero.Prefs.get('extensions.refsense.pageRange', '1-2');
+                    document.getElementById('page-source').value = pageSource;
+                    document.getElementById('page-range').value = pageRange;
+                    
+                    this.updateUIVisibility();
+                } catch (error) {
+                    console.error('설정 로드 실패:', error);
+                }
+            },
+            
+            bindEvents() {
+                // AI 백엔드 변경 시 UI 업데이트
+                document.getElementById('ai-backend').addEventListener('command', () => {
+                    this.updateUIVisibility();
+                    this.saveSettings();
+                });
+                
+                // 페이지 소스 변경 시 UI 업데이트
+                document.getElementById('page-source').addEventListener('command', () => {
+                    this.updateUIVisibility();
+                    this.saveSettings();
+                });
+                
+                // 모든 입력 필드에 change 이벤트 바인딩
+                const inputs = ['openai-model', 'openai-api-key', 'ollama-model', 'ollama-host', 'page-range'];
+                inputs.forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        element.addEventListener('input', () => this.saveSettings());
+                    }
+                });
+                
+                // 테스트 버튼
+                document.getElementById('test-openai').addEventListener('command', () => this.testOpenAI());
+                document.getElementById('test-ollama').addEventListener('command', () => this.testOllama());
+            },
+            
+            updateUIVisibility() {
+                const aiBackend = document.getElementById('ai-backend').value;
+                const pageSource = document.getElementById('page-source').value;
+                
+                // AI 백엔드별 섹션 표시/숨김
+                document.getElementById('openai-section').hidden = (aiBackend !== 'openai');
+                document.getElementById('ollama-section').hidden = (aiBackend !== 'ollama');
+                
+                // 페이지 범위 입력 활성화/비활성화
+                document.getElementById('page-range').disabled = (pageSource !== 'range');
+            },
+            
+            saveSettings() {
+                try {
+                    // 모든 설정 저장
+                    Zotero.Prefs.set('extensions.refsense.aiBackend', document.getElementById('ai-backend').value);
+                    Zotero.Prefs.set('extensions.refsense.openaiModel', document.getElementById('openai-model').value);
+                    Zotero.Prefs.set('extensions.refsense.ollamaModel', document.getElementById('ollama-model').value);
+                    Zotero.Prefs.set('extensions.refsense.ollamaHost', document.getElementById('ollama-host').value);
+                    Zotero.Prefs.set('extensions.refsense.defaultPageSource', document.getElementById('page-source').value);
+                    Zotero.Prefs.set('extensions.refsense.pageRange', document.getElementById('page-range').value);
+                    
+                    // API 키는 Base64 인코딩하여 저장
+                    const apiKey = document.getElementById('openai-api-key').value.trim();
+                    if (apiKey) {
+                        const encodedKey = btoa(apiKey);
+                        Zotero.Prefs.set('extensions.refsense.openaiApiKey', encodedKey);
+                    }
+                } catch (error) {
+                    console.error('설정 저장 실패:', error);
+                }
+            },
+            
+            async testOpenAI() {
+                const apiKey = document.getElementById('openai-api-key').value.trim();
+                if (!apiKey) {
+                    this.showMessage('OpenAI API 키를 입력해주세요.', 'error');
+                    return;
+                }
+                
+                if (!apiKey.startsWith('sk-')) {
+                    this.showMessage('OpenAI API 키는 sk-로 시작해야 합니다.', 'error');
+                    return;
+                }
+                
+                this.showMessage('API 키 형식이 올바릅니다.', 'success');
+            },
+            
+            async testOllama() {
+                const host = document.getElementById('ollama-host').value.trim();
+                if (!host) {
+                    this.showMessage('Ollama 호스트를 입력해주세요.', 'error');
+                    return;
+                }
+                
+                try {
+                    // Ollama 연결 테스트 (간단한 형식 검증)
+                    if (!host.startsWith('http://') && !host.startsWith('https://')) {
+                        this.showMessage('호스트는 http:// 또는 https://로 시작해야 합니다.', 'error');
+                        return;
+                    }
+                    
+                    this.showMessage('Ollama 호스트 형식이 올바릅니다.', 'success');
+                } catch (error) {
+                    this.showMessage('연결 테스트 실패: ' + error.message, 'error');
+                }
+            },
+            
+            showMessage(text, type = 'info') {
+                if (typeof Zotero !== 'undefined' && Zotero.alert) {
+                    Zotero.alert(null, 'RefSense', text);
+                } else {
+                    alert(text);
+                }
+            }
+        };
         
-        <grid>
-            <columns>
-                <column style="min-width: 120px;"/>
-                <column flex="1"/>
-            </columns>
-            <rows>
-                <row align="center">
-                    <label value="OpenAI API 키:"/>
-                    <textbox id="refsense-api-key" 
-                             preference="extensions.refsense.openai_api_key"
-                             placeholder="sk-..."
-                             style="min-width: 300px;"/>
-                </row>
-                <row align="center">
-                    <label value="모델:"/>
-                    <menulist id="refsense-model" 
-                              preference="extensions.refsense.openai_model"
-                              style="min-width: 200px;">
-                        <menupopup>
-                            <menuitem label="GPT-4 Turbo" value="gpt-4-turbo"/>
-                            <menuitem label="GPT-4" value="gpt-4"/>
-                            <menuitem label="GPT-3.5 Turbo" value="gpt-3.5-turbo"/>
-                        </menupopup>
-                    </menulist>
-                </row>
-            </rows>
-        </grid>
+        // 페이지 로드 완료 시 초기화
+        window.addEventListener('load', () => RefSensePrefs.init());
+    </script>
+    
+    <groupbox>
+        <caption label="RefSense AI 메타데이터 추출기"/>
+        
+        <!-- AI 백엔드 선택 -->
+        <hbox align="center">
+            <label value="AI 백엔드:" style="min-width: 100px;"/>
+            <menulist id="ai-backend" style="min-width: 150px;">
+                <menupopup>
+                    <menuitem label="OpenAI (GPT)" value="openai"/>
+                    <menuitem label="Ollama (로컬)" value="ollama"/>
+                </menupopup>
+            </menulist>
+        </hbox>
         
         <separator style="margin: 10px 0;"/>
         
-        <description>
-            OpenAI 계정에서 발급받은 API 키를 입력하세요.
-        </description>
+        <!-- OpenAI 설정 섹션 -->
+        <groupbox id="openai-section">
+            <caption label="OpenAI 설정"/>
+            
+            <grid>
+                <columns>
+                    <column style="min-width: 100px;"/>
+                    <column flex="1"/>
+                    <column style="min-width: 80px;"/>
+                </columns>
+                <rows>
+                    <row align="center">
+                        <label value="API 키:"/>
+                        <textbox id="openai-api-key" 
+                                placeholder="sk-..."
+                                type="password"
+                                style="min-width: 300px;"/>
+                        <button id="test-openai" label="테스트"/>
+                    </row>
+                    <row align="center">
+                        <label value="모델:"/>
+                        <menulist id="openai-model" style="min-width: 200px;">
+                            <menupopup>
+                                <menuitem label="GPT-4 Turbo" value="gpt-4-turbo"/>
+                                <menuitem label="GPT-4" value="gpt-4"/>
+                                <menuitem label="GPT-3.5 Turbo" value="gpt-3.5-turbo"/>
+                            </menupopup>
+                        </menulist>
+                        <spacer/>
+                    </row>
+                </rows>
+            </grid>
+            
+            <description style="margin-top: 5px;">
+                OpenAI 계정(https://platform.openai.com)에서 발급받은 API 키를 입력하세요.
+            </description>
+        </groupbox>
         
-        <description style="margin-top: 5px;">
-            PDF 리더에서 Ctrl+Shift+E 또는 RefSense 버튼을 사용하세요.
-        </description>
+        <!-- Ollama 설정 섹션 -->
+        <groupbox id="ollama-section" hidden="true">
+            <caption label="Ollama 설정"/>
+            
+            <grid>
+                <columns>
+                    <column style="min-width: 100px;"/>
+                    <column flex="1"/>
+                    <column style="min-width: 80px;"/>
+                </columns>
+                <rows>
+                    <row align="center">
+                        <label value="호스트:"/>
+                        <textbox id="ollama-host" 
+                                placeholder="http://localhost:11434"
+                                style="min-width: 300px;"/>
+                        <button id="test-ollama" label="테스트"/>
+                    </row>
+                    <row align="center">
+                        <label value="모델:"/>
+                        <textbox id="ollama-model" 
+                                placeholder="llama3.2:latest"
+                                style="min-width: 200px;"/>
+                        <spacer/>
+                    </row>
+                </rows>
+            </grid>
+            
+            <description style="margin-top: 5px;">
+                로컬에서 실행 중인 Ollama 서버 정보를 입력하세요. (https://ollama.ai)
+            </description>
+        </groupbox>
+        
+        <separator style="margin: 10px 0;"/>
+        
+        <!-- 페이지 추출 설정 -->
+        <groupbox>
+            <caption label="PDF 페이지 추출 설정"/>
+            
+            <grid>
+                <columns>
+                    <column style="min-width: 100px;"/>
+                    <column flex="1"/>
+                </columns>
+                <rows>
+                    <row align="center">
+                        <label value="추출 페이지:"/>
+                        <menulist id="page-source" style="min-width: 150px;">
+                            <menupopup>
+                                <menuitem label="첫 페이지" value="first"/>
+                                <menuitem label="현재 페이지" value="current"/>
+                                <menuitem label="페이지 범위" value="range"/>
+                            </menupopup>
+                        </menulist>
+                    </row>
+                    <row align="center">
+                        <label value="페이지 범위:"/>
+                        <textbox id="page-range" 
+                                placeholder="1-2"
+                                disabled="true"
+                                style="min-width: 100px;"/>
+                    </row>
+                </rows>
+            </grid>
+            
+            <description style="margin-top: 5px;">
+                기본적으로 첫 페이지에서 서지정보를 추출합니다.
+            </description>
+        </groupbox>
+        
+        <separator style="margin: 10px 0;"/>
+        
+        <!-- 사용법 안내 -->
+        <groupbox>
+            <caption label="사용법"/>
+            <description>
+                1. PDF 파일을 Zotero에서 열기
+            </description>
+            <description>
+                2. 키보드 단축키 Ctrl+Shift+E 또는 우상단 RefSense 버튼 클릭
+            </description>
+            <description>
+                3. AI가 메타데이터를 추출하여 parent 아이템 자동 생성
+            </description>
+        </groupbox>
     </groupbox>
 </vbox>

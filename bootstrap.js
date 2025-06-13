@@ -113,24 +113,177 @@ RefSense.Plugin = {
         try {
             this.log('Setting up preferences messaging');
             
-            // Zotero 메인 창에 직접 메시지 리스너 등록
-            const mainWindow = Zotero.getMainWindow();
-            if (mainWindow && mainWindow.addEventListener) {
-                this.setupMainWindowMessageListener(mainWindow);
-                this.log('✅ Main window message listener registered');
-            }
-            
-            // 추가로 현재 창에도 리스너 등록 (이중 보장)
-            if (typeof window !== 'undefined' && window.addEventListener) {
-                this.setupWindowMessageListener(window);
-                this.log('✅ Current window message listener registered');
-            }
-            
-            // 모든 윈도우에도 등록 (fallback)
-            this.addMessageListenerToAllWindows();
+            // 간단하고 직접적인 메시지 리스너 등록
+            this.setupDirectMessageListener();
             
         } catch (error) {
             this.log('❌ Failed to setup preferences messaging:', error.message);
+        }
+    },
+    
+    // 직접적인 메시지 리스너 설정 (Zotero Main Window에 등록)
+    setupDirectMessageListener() {
+        try {
+            // Zotero 메인 UI 창에 메시지 리스너 등록
+            const ZoteroPane = Zotero.getMainWindow();
+            
+            if (ZoteroPane && ZoteroPane.addEventListener) {
+                ZoteroPane.addEventListener("message", (event) => {
+                    if (!event.data || !event.data.type) return;
+                    
+                    this.log('[RefSense bootstrap] 받은 메시지:', event.data.type);
+                    
+                    const { type, settings } = event.data;
+                    
+                    if (type === "refsense-get-settings") {
+                        this.log('Processing get-settings request from main window');
+                        
+                        // 설정 읽기 (통합된 설정 키 사용)
+                        const result = {
+                            aiBackend: Zotero.Prefs.get("extensions.refsense.aiBackend", "openai"),
+                            openaiModel: Zotero.Prefs.get("extensions.refsense.openaiModel", "gpt-4-turbo"),
+                            openaiApiKey: Zotero.Prefs.get("extensions.refsense.openaiApiKey", ""),
+                            ollamaHost: Zotero.Prefs.get("extensions.refsense.ollamaHost", "http://localhost:11434"),
+                            ollamaModel: Zotero.Prefs.get("extensions.refsense.ollamaModel", "llama3.2:latest"),
+                            defaultPageSource: Zotero.Prefs.get("extensions.refsense.defaultPageSource", "first"),
+                            pageRange: Zotero.Prefs.get("extensions.refsense.pageRange", "1-2")
+                        };
+                        
+                        this.log('Sending settings:', result);
+                        
+                        if (event.source) {
+                            event.source.postMessage({
+                                type: "refsense-settings-response",
+                                settings: result
+                            }, event.origin || "*");
+                            this.log('✅ Settings response sent to preferences window');
+                        }
+                    }
+                    
+                    if (type === "refsense-save-settings") {
+                        this.log('Processing save-settings request from main window');
+                        
+                        if (settings) {
+                            try {
+                                // 설정 저장
+                                Object.keys(settings).forEach(key => {
+                                    const prefKey = `extensions.refsense.${key}`;
+                                    Zotero.Prefs.set(prefKey, settings[key]);
+                                    this.log(`Saved: ${prefKey} = ${settings[key]}`);
+                                });
+                                
+                                // 설정 새로고침
+                                this.loadConfig();
+                                
+                                if (event.source) {
+                                    event.source.postMessage({
+                                        type: "refsense-save-response",
+                                        success: true
+                                    }, event.origin || "*");
+                                    this.log('✅ Save success response sent to preferences window');
+                                }
+                            } catch (saveError) {
+                                this.log('❌ Error saving settings:', saveError.message);
+                                if (event.source) {
+                                    event.source.postMessage({
+                                        type: "refsense-save-error",
+                                        error: saveError.message
+                                    }, event.origin || "*");
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (type === "refsense-test-connection") {
+                        this.log('Processing test-connection request from main window');
+                        this.handleConnectionTest(event);
+                    }
+                });
+                
+                this.log('✅ Direct message listener registered on Zotero main window');
+            } else {
+                this.log('❌ Could not access Zotero main window');
+            }
+            
+        } catch (error) {
+            this.log('❌ Error setting up direct message listener:', error.message);
+        }
+    },
+    
+    // 연결 테스트 처리
+    handleConnectionTest(event) {
+        const { backend, config } = event.data;
+        
+        if (backend === 'ollama') {
+            this.testOllamaConnection(config.host).then(result => {
+                if (event.source) {
+                    event.source.postMessage({
+                        type: 'refsense-test-response',
+                        success: result.success,
+                        message: result.message
+                    }, event.origin || "*");
+                    this.log('Ollama test response sent');
+                }
+            });
+        } else if (backend === 'openai') {
+            const isValid = config.apiKey && config.apiKey.startsWith('sk-') && config.apiKey.length > 40;
+            if (event.source) {
+                event.source.postMessage({
+                    type: 'refsense-test-response',
+                    success: isValid,
+                    message: isValid ? 'OpenAI API 키 형식이 올바릅니다!' : 'OpenAI API 키 형식이 올바르지 않습니다.'
+                }, event.origin || "*");
+                this.log('OpenAI test response sent');
+            }
+        }
+    },
+    
+    // 직접 메시지 처리 (메인 윈도우용)
+    handleDirectMessage(event) {
+        // setupDirectMessageListener와 동일한 로직
+        const { type, settings } = event.data || {};
+        
+        if (type === "refsense-get-settings") {
+            const result = {
+                ai_backend: Zotero.Prefs.get("extensions.refsense.ai_backend", "ollama"),
+                openai_model: Zotero.Prefs.get("extensions.refsense.openai_model", "gpt-4-turbo"),
+                openai_api_key: Zotero.Prefs.get("extensions.refsense.openai_api_key", ""),
+                ollama_host: Zotero.Prefs.get("extensions.refsense.ollama_host", "http://localhost:11434"),
+                ollama_model: Zotero.Prefs.get("extensions.refsense.ollama_model", "llama3.2:latest"),
+                default_page_source: Zotero.Prefs.get("extensions.refsense.default_page_source", "first"),
+                page_range: Zotero.Prefs.get("extensions.refsense.page_range", "1-2")
+            };
+            
+            if (event.source) {
+                event.source.postMessage({
+                    type: "refsense-settings-response",
+                    settings: result
+                }, event.origin || "*");
+            }
+        }
+        
+        if (type === "refsense-save-settings" && settings) {
+            try {
+                Object.keys(settings).forEach(key => {
+                    const prefKey = `extensions.refsense.${key}`;
+                    Zotero.Prefs.set(prefKey, settings[key]);
+                });
+                this.loadConfig();
+                
+                if (event.source) {
+                    event.source.postMessage({
+                        type: "refsense-save-response",
+                        success: true
+                    }, event.origin || "*");
+                }
+            } catch (error) {
+                if (event.source) {
+                    event.source.postMessage({
+                        type: "refsense-save-error",
+                        error: error.message
+                    }, event.origin || "*");
+                }
+            }
         }
     },
     
@@ -615,18 +768,61 @@ RefSense.Plugin = {
     },
     
     // Load plugin configuration
+    // Load configuration from Zotero preferences (updated for integrated settings)
     loadConfig() {
-        this.config = {
-            ai_backend: Zotero.Prefs.get('extensions.refsense.ai_backend') || 'ollama',
-            openai_api_key: Zotero.Prefs.get('extensions.refsense.openai_api_key') || '',
-            openai_model: Zotero.Prefs.get('extensions.refsense.openai_model') || 'gpt-4-turbo',
-            ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model') || 'llama3.2:latest',
-            ollama_host: Zotero.Prefs.get('extensions.refsense.ollama_host') || 'http://localhost:11434',
-            default_page_source: Zotero.Prefs.get('extensions.refsense.default_page_source') || 'first',
-            page_range: Zotero.Prefs.get('extensions.refsense.page_range') || '1-2'
-        };
-        
-        this.log('Configuration loaded:', this.config);
+        try {
+            this.config = {
+                // AI 백엔드 설정
+                aiBackend: Zotero.Prefs.get('extensions.refsense.aiBackend') || 'openai',
+                
+                // OpenAI 설정
+                openaiModel: Zotero.Prefs.get('extensions.refsense.openaiModel') || 'gpt-4-turbo',
+                openaiApiKey: Zotero.Prefs.get('extensions.refsense.openaiApiKey') || '',
+                
+                // Ollama 설정
+                ollamaModel: Zotero.Prefs.get('extensions.refsense.ollamaModel') || 'llama3.2:latest',
+                ollamaHost: Zotero.Prefs.get('extensions.refsense.ollamaHost') || 'http://localhost:11434',
+                
+                // PDF 추출 설정
+                defaultPageSource: Zotero.Prefs.get('extensions.refsense.defaultPageSource') || 'first',
+                pageRange: Zotero.Prefs.get('extensions.refsense.pageRange') || '1-2',
+                
+                // 기타 설정
+                enableLogging: Zotero.Prefs.get('extensions.refsense.enableLogging') !== false,
+                maxRetries: Zotero.Prefs.get('extensions.refsense.maxRetries') || 3,
+                requestTimeout: Zotero.Prefs.get('extensions.refsense.requestTimeout') || 30000
+            };
+            
+            // API 키 디코딩 (Base64로 저장됨)
+            if (this.config.openaiApiKey) {
+                try {
+                    this.config.openaiApiKey = atob(this.config.openaiApiKey);
+                } catch (error) {
+                    this.log('API key decoding failed, using raw value');
+                }
+            }
+            
+            this.log('Configuration loaded:', {
+                ...this.config,
+                openaiApiKey: this.config.openaiApiKey ? '[HIDDEN]' : '[NOT SET]'
+            });
+            
+        } catch (error) {
+            this.log('Error loading configuration:', error.message);
+            // 기본값으로 fallback
+            this.config = {
+                aiBackend: 'openai',
+                openaiModel: 'gpt-4-turbo',
+                openaiApiKey: '',
+                ollamaModel: 'llama3.2:latest',
+                ollamaHost: 'http://localhost:11434',
+                defaultPageSource: 'first',
+                pageRange: '1-2',
+                enableLogging: true,
+                maxRetries: 3,
+                requestTimeout: 30000
+            };
+        }
     },
     
     // Initialize UI components with retry logic
@@ -1248,14 +1444,14 @@ RefSense.Plugin = {
     
     // Determine which page to extract based on settings
     getPageToExtract(pdfContext) {
-        const pageSource = this.config.default_page_source || 'first';
+        const pageSource = this.config.defaultPageSource || 'first';
         
         switch (pageSource) {
             case 'current':
                 return pdfContext.currentPage;
             case 'range':
                 // For now, just use first page of range
-                const range = this.config.page_range || '1';
+                const range = this.config.pageRange || '1';
                 const firstPage = parseInt(range.split(/[-–—]/)[0]) || 1;
                 return Math.min(firstPage, pdfContext.totalPages || 1);
             case 'first':
