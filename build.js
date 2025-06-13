@@ -10,7 +10,8 @@ const BUILD_CONFIG = {
     srcDir: './src',
     buildDir: './build',
     manifestFile: './manifest.json',
-    outputFile: 'refsense.xpi'
+    outputFile: 'refsense.xpi',
+    modulesDir: './modules'
 };
 
 // Generate build number
@@ -46,6 +47,11 @@ async function build() {
         // Copy icons (if they exist)
         await copyIcons();
         
+        // Optional: Create minified version for production
+        if (process.env.NODE_ENV === 'production') {
+            await minifyJSFiles();
+        }
+        
         // Create XPI package with build number
         const outputFile = `refsense-${buildNumber.full}.xpi`;
         await createXPI(outputFile);
@@ -77,6 +83,14 @@ async function copySourceFiles() {
     if (fs.existsSync(srcPath)) {
         copyDirectory(srcPath, destPath);
         console.log('Copied source files');
+    }
+    
+    // Copy modules directory (new modular structure)
+    const modulesPath = BUILD_CONFIG.modulesDir;
+    const modulesDest = path.join(BUILD_CONFIG.buildDir, 'modules');
+    if (fs.existsSync(modulesPath)) {
+        copyDirectory(modulesPath, modulesDest);
+        console.log('Copied modules directory');
     }
     
     // Copy AI modules
