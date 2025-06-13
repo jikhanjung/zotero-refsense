@@ -9,6 +9,14 @@ if (typeof Zotero === 'undefined') {
 
 var RefSense = RefSense || {};
 
+// Make RefSense globally accessible for menu commands
+if (typeof window !== 'undefined') {
+    window.RefSense = RefSense;
+}
+if (typeof globalThis !== 'undefined') {
+    globalThis.RefSense = RefSense;
+}
+
 // Plugin initialization
 RefSense.Plugin = {
     id: 'refsense@zotero-plugin',
@@ -36,10 +44,17 @@ RefSense.Plugin = {
             // Load configuration
             this.loadConfig();
             
-            // Initialize UI components with delay
-            setTimeout(() => {
-                this.initUI();
-            }, 3000);
+            // Register preferences pane (Zotero 7 way)
+            this.registerPreferencesPane();
+            
+            // Setup preferences message handling
+            this.setupPreferencesMessaging();
+            
+            // 전역 접근을 위한 추가 등록
+            this.setupGlobalAccess();
+            
+            // Initialize UI components with multiple retries
+            this.initUIWithRetry();
             
             this.initialized = true;
             this.log('RefSense plugin started successfully');
@@ -56,9 +71,542 @@ RefSense.Plugin = {
         this.log('RefSense plugin loaded successfully');
     },
     
+    // Register preferences using options_ui (Zotero 7 compatible)
+    registerPreferencesPane() {
+        try {
+            this.log('Setting up preferences using options_ui method');
+            
+            // Zotero 7에서는 manifest.json의 options_ui가 자동으로 처리됨
+            // 하지만 명시적으로 등록하여 확실히 하기
+            if (Zotero.Prefs && typeof Zotero.Prefs.registerObserver === 'function') {
+                // 설정 변경 감지를 위한 옵저버 등록
+                const prefBranch = 'extensions.refsense.';
+                Zotero.Prefs.registerObserver(prefBranch, () => {
+                    this.log('RefSense 설정이 변경되었습니다');
+                    this.loadConfig();
+                }, false);
+                this.log('✅ Preferences observer registered');
+            }
+            
+            // 플러그인 매니저에서 Options 버튼이 표시되도록 하기 위한 추가 등록
+            try {
+                const addons = Zotero.AddonManager;
+                if (addons) {
+                    this.log('AddonManager found, ensuring options are available');
+                }
+            } catch (addonError) {
+                this.log('AddonManager access failed:', addonError.message);
+            }
+            
+            this.log('✅ Preferences setup completed using options_ui');
+            return true;
+            
+        } catch (error) {
+            this.log('❌ Failed to setup preferences:', error.message);
+            this.log('Error stack:', error.stack);
+            return false;
+        }
+    },
+    
+    // Setup preferences messaging for options_ui
+    setupPreferencesMessaging() {
+        try {
+            this.log('Setting up preferences messaging');
+            
+            // Zotero 메인 창에 직접 메시지 리스너 등록
+            const mainWindow = Zotero.getMainWindow();
+            if (mainWindow && mainWindow.addEventListener) {
+                this.setupMainWindowMessageListener(mainWindow);
+                this.log('✅ Main window message listener registered');
+            }
+            
+            // 추가로 현재 창에도 리스너 등록 (이중 보장)
+            if (typeof window !== 'undefined' && window.addEventListener) {
+                this.setupWindowMessageListener(window);
+                this.log('✅ Current window message listener registered');
+            }
+            
+            // 모든 윈도우에도 등록 (fallback)
+            this.addMessageListenerToAllWindows();
+            
+        } catch (error) {
+            this.log('❌ Failed to setup preferences messaging:', error.message);
+        }
+    },
+    
+    // 메인 윈도우에 메시지 리스너 설정
+    setupMainWindowMessageListener(win) {
+        try {
+            // 기존 리스너 제거
+            if (win._refSenseMainMessageListener) {
+                win.removeEventListener('message', win._refSenseMainMessageListener);
+            }
+            
+            // 새 메시지 리스너 등록
+            win._refSenseMainMessageListener = (event) => {
+                this.log('Main window received message:', event.data?.type);
+                this.handlePostMessage(event);
+            };
+            
+            win.addEventListener('message', win._refSenseMainMessageListener);
+            this.log('Main window message listener added');
+            
+        } catch (error) {
+            this.log('Error setting up main window listener:', error.message);
+        }
+    },
+    
+    // 일반 윈도우에 메시지 리스너 설정
+    setupWindowMessageListener(win) {
+        try {
+            // 기존 리스너 제거
+            if (win._refSenseWindowMessageListener) {
+                win.removeEventListener('message', win._refSenseWindowMessageListener);
+            }
+            
+            // 새 메시지 리스너 등록
+            win._refSenseWindowMessageListener = (event) => {
+                this.log('Window received message:', event.data?.type);
+                this.handlePostMessage(event);
+            };
+            
+            win.addEventListener('message', win._refSenseWindowMessageListener);
+            this.log('Window message listener added');
+            
+        } catch (error) {
+            this.log('Error setting up window listener:', error.message);
+        }
+    },
+    
+    // postMessage 이벤트 처리
+    handlePostMessage(event) {
+        try {
+            // 보안: 메시지 검증
+            if (!event.data || !event.data.type || !event.data.type.startsWith('refsense-')) {
+                return;
+            }
+            
+            this.log('Processing postMessage:', event.data.type);
+            
+            switch (event.data.type) {
+                case 'refsense-get-settings':
+                    this.log('Handling get-settings request');
+                    const settings = this.getSettingsForPreferences();
+                    if (settings.success && event.source) {
+                        event.source.postMessage({
+                            type: 'refsense-settings-response',
+                            settings: settings.settings
+                        }, event.origin || '*');
+                        this.log('Settings response sent');
+                    }
+                    break;
+                    
+                case 'refsense-save-settings':
+                    this.log('Handling save-settings request');
+                    const saveResult = this.saveSettingsFromPreferences(event.data.settings);
+                    if (event.source) {
+                        if (saveResult.success) {
+                            event.source.postMessage({
+                                type: 'refsense-save-response',
+                                success: true
+                            }, event.origin || '*');
+                            this.log('Save success response sent');
+                        } else {
+                            event.source.postMessage({
+                                type: 'refsense-save-error',
+                                error: saveResult.error
+                            }, event.origin || '*');
+                            this.log('Save error response sent');
+                        }
+                    }
+                    break;
+                    
+                case 'refsense-test-connection':
+                    this.log('Handling test-connection request');
+                    this.testConnectionFromPreferences(event.data.backend, event.data.config, event.source, event.origin);
+                    break;
+            }
+            
+        } catch (error) {
+            this.log('❌ Error handling postMessage:', error.message);
+        }
+    },
+    
+    // 전역 접근 설정
+    setupGlobalAccess() {
+        try {
+            this.log('Setting up global access for preferences');
+            
+            // Zotero 객체에 직접 등록
+            if (typeof Zotero !== 'undefined') {
+                Zotero.RefSense = this;
+                this.log('✅ Zotero.RefSense registered');
+            }
+            
+            // 전역 객체에 등록 (다중 접근)
+            if (typeof globalThis !== 'undefined') {
+                globalThis.RefSense = RefSense;
+                globalThis.RefSensePlugin = this;
+                this.log('✅ globalThis.RefSense registered');
+            }
+            
+            if (typeof window !== 'undefined') {
+                window.RefSense = RefSense;
+                window.RefSensePlugin = this;
+                this.log('✅ window.RefSense registered');
+            }
+            
+            // 메인 윈도우에도 등록
+            try {
+                const mainWindow = Zotero.getMainWindow();
+                if (mainWindow) {
+                    mainWindow.RefSense = RefSense;
+                    mainWindow.RefSensePlugin = this;
+                    this.log('✅ mainWindow.RefSense registered');
+                }
+            } catch (error) {
+                this.log('Main window access failed:', error.message);
+            }
+            
+        } catch (error) {
+            this.log('❌ Failed to setup global access:', error.message);
+        }
+    },
+    
+    // 모든 윈도우에 메시지 리스너 추가
+    addMessageListenerToAllWindows() {
+        try {
+            const windowMediator = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                                           .getService(Components.interfaces.nsIWindowMediator);
+            const windows = windowMediator.getEnumerator(null);
+            
+            while (windows.hasMoreElements()) {
+                const win = windows.getNext();
+                if (win && win.addEventListener) {
+                    this.addMessageListenerToWindow(win);
+                }
+            }
+        } catch (error) {
+            this.log('Error adding listeners to existing windows:', error.message);
+        }
+    },
+    
+    // 특정 윈도우에 메시지 리스너 추가
+    addMessageListenerToWindow(win) {
+        try {
+            // 이미 리스너가 있으면 제거
+            if (win._refSenseMessageListener) {
+                win.removeEventListener('message', win._refSenseMessageListener);
+            }
+            
+            // 새 리스너 추가
+            win._refSenseMessageListener = (event) => {
+                this.handlePreferencesMessage(event);
+            };
+            
+            win.addEventListener('message', win._refSenseMessageListener);
+            this.log('Message listener added to window:', win.location?.href || 'unknown');
+            
+        } catch (error) {
+            this.log('Error adding listener to window:', error.message);
+        }
+    },
+    
+    // nsIWindowWatcher 인터페이스 구현
+    observe(subject, topic, data) {
+        if (topic === 'domwindowopened') {
+            try {
+                // 새 윈도우가 열릴 때 리스너 추가
+                const win = subject;
+                if (win && win.addEventListener) {
+                    win.addEventListener('load', () => {
+                        this.addMessageListenerToWindow(win);
+                    });
+                }
+            } catch (error) {
+                this.log('Error in observe:', error.message);
+            }
+        }
+    },
+    
+    // Handle direct message calls
+    handleDirectMessage(data) {
+        try {
+            this.log('Direct message received:', data.type);
+            
+            switch (data.type) {
+                case 'refsense-get-settings':
+                    return this.getSettingsForPreferences();
+                    
+                case 'refsense-save-settings':
+                    return this.saveSettingsFromPreferences(data.settings);
+                    
+                case 'refsense-test-connection':
+                    return this.testConnectionFromPreferences(data.backend, data.config);
+            }
+            
+        } catch (error) {
+            this.log('❌ Error handling direct message:', error.message);
+            return { error: error.message };
+        }
+    },
+    
+    // Handle messages from preferences window
+    handlePreferencesMessage(event) {
+        try {
+            // 보안: 메시지 검증
+            if (!event.data || !event.data.type || !event.data.type.startsWith('refsense-')) {
+                return;
+            }
+            
+            // 보안: origin 확인 (chrome://zotero 또는 moz-extension://)
+            if (!event.origin.startsWith('chrome://') && !event.origin.startsWith('moz-extension://')) {
+                this.log('❌ 허용되지 않은 origin에서 메시지:', event.origin);
+                return;
+            }
+            
+            this.log('Received preferences message:', event.data.type);
+            
+            switch (event.data.type) {
+                case 'refsense-get-settings':
+                    this.sendSettingsToPreferences(event.source);
+                    break;
+                    
+                case 'refsense-save-settings':
+                    this.saveSettingsFromPreferences(event.data.settings, event.source);
+                    break;
+                    
+                case 'refsense-test-connection':
+                    this.testConnectionFromPreferences(event.data.backend, event.data.config, event.source);
+                    break;
+            }
+            
+        } catch (error) {
+            this.log('❌ Error handling preferences message:', error.message);
+        }
+    },
+    
+    // Get settings for preferences (direct call)
+    getSettingsForPreferences() {
+        try {
+            const settings = {
+                ai_backend: Zotero.Prefs.get('extensions.refsense.ai_backend', 'ollama'),
+                openai_api_key: Zotero.Prefs.get('extensions.refsense.openai_api_key', ''),
+                openai_model: Zotero.Prefs.get('extensions.refsense.openai_model', 'gpt-4-turbo'),
+                ollama_host: Zotero.Prefs.get('extensions.refsense.ollama_host', 'http://localhost:11434'),
+                ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model', 'llama3.2:latest'),
+                default_page_source: Zotero.Prefs.get('extensions.refsense.default_page_source', 'first'),
+                page_range: Zotero.Prefs.get('extensions.refsense.page_range', '1-2')
+            };
+            
+            this.log('Settings retrieved for preferences');
+            return { success: true, settings: settings };
+            
+        } catch (error) {
+            this.log('❌ Error getting settings:', error.message);
+            return { success: false, error: error.message };
+        }
+    },
+    
+    // Send current settings to preferences window (postMessage)
+    sendSettingsToPreferences(source) {
+        try {
+            const result = this.getSettingsForPreferences();
+            
+            if (result.success) {
+                source.postMessage({
+                    type: 'refsense-settings-response',
+                    settings: result.settings
+                }, '*');
+                this.log('Settings sent to preferences window');
+            } else {
+                source.postMessage({
+                    type: 'refsense-settings-error',
+                    error: result.error
+                }, '*');
+            }
+            
+        } catch (error) {
+            this.log('❌ Error sending settings:', error.message);
+            source.postMessage({
+                type: 'refsense-settings-error',
+                error: error.message
+            }, '*');
+        }
+    },
+    
+    // Save settings (direct call)
+    saveSettingsFromPreferences(settings, source = null) {
+        try {
+            // Save all settings
+            Object.keys(settings).forEach(key => {
+                const prefKey = `extensions.refsense.${key}`;
+                Zotero.Prefs.set(prefKey, settings[key]);
+            });
+            
+            // Reload config
+            this.loadConfig();
+            
+            this.log('Settings saved from preferences window');
+            
+            if (source) {
+                source.postMessage({
+                    type: 'refsense-save-response',
+                    success: true
+                }, '*');
+            }
+            
+            return { success: true };
+            
+        } catch (error) {
+            this.log('❌ Error saving settings:', error.message);
+            
+            if (source) {
+                source.postMessage({
+                    type: 'refsense-save-error',
+                    error: error.message
+                }, '*');
+            }
+            
+            return { success: false, error: error.message };
+        }
+    },
+    
+    // Test connection from preferences window
+    testConnectionFromPreferences(backend, config, source, origin = '*') {
+        try {
+            this.log(`Testing ${backend} connection`);
+            
+            if (backend === 'ollama') {
+                // Test Ollama connection
+                this.testOllamaConnection(config.host).then(result => {
+                    if (source) {
+                        source.postMessage({
+                            type: 'refsense-test-response',
+                            success: result.success,
+                            message: result.message
+                        }, origin);
+                        this.log('Test response sent for Ollama');
+                    }
+                });
+            } else {
+                // OpenAI test (simple validation)
+                const isValid = config.apiKey && config.apiKey.startsWith('sk-') && config.apiKey.length > 40;
+                if (source) {
+                    source.postMessage({
+                        type: 'refsense-test-response',
+                        success: isValid,
+                        message: isValid ? 'OpenAI API 키 형식이 올바릅니다!' : 'OpenAI API 키 형식이 올바르지 않습니다.'
+                    }, origin);
+                    this.log('Test response sent for OpenAI');
+                }
+            }
+            
+        } catch (error) {
+            this.log('❌ Error testing connection:', error.message);
+            if (source) {
+                source.postMessage({
+                    type: 'refsense-test-error',
+                    error: error.message
+                }, origin);
+            }
+        }
+    },
+    
+    // Test Ollama connection
+    async testOllamaConnection(host) {
+        return new Promise((resolve) => {
+            try {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', `${host}/api/tags`, true);
+                xhr.timeout = 5000;
+                
+                xhr.onreadystatechange = () => {
+                    if (xhr.readyState === 4) {
+                        if (xhr.status === 200) {
+                            try {
+                                const data = JSON.parse(xhr.responseText);
+                                const modelCount = data.models ? data.models.length : 0;
+                                resolve({
+                                    success: true,
+                                    message: `Ollama 연결 성공! (설치된 모델: ${modelCount}개)`
+                                });
+                            } catch (parseError) {
+                                resolve({
+                                    success: true,
+                                    message: 'Ollama 연결 성공!'
+                                });
+                            }
+                        } else {
+                            resolve({
+                                success: false,
+                                message: `Ollama 서버 응답 오류: ${xhr.status}`
+                            });
+                        }
+                    }
+                };
+                
+                xhr.onerror = () => resolve({
+                    success: false,
+                    message: 'Ollama 연결 실패: 네트워크 오류'
+                });
+                
+                xhr.ontimeout = () => resolve({
+                    success: false,
+                    message: 'Ollama 연결 실패: 타임아웃'
+                });
+                
+                xhr.send();
+                
+            } catch (error) {
+                resolve({
+                    success: false,
+                    message: `Ollama 연결 실패: ${error.message}`
+                });
+            }
+        });
+    },
+    
+    
     // Plugin shutdown
     shutdown() {
         this.log('RefSense plugin shutting down...');
+        
+        // Clean up message listeners
+        try {
+            // 메인 윈도우 리스너 정리
+            const mainWindow = Zotero.getMainWindow();
+            if (mainWindow && mainWindow._refSenseMainMessageListener) {
+                mainWindow.removeEventListener('message', mainWindow._refSenseMainMessageListener);
+                delete mainWindow._refSenseMainMessageListener;
+            }
+            
+            // 현재 윈도우 리스너 정리
+            if (typeof window !== 'undefined' && window._refSenseWindowMessageListener) {
+                window.removeEventListener('message', window._refSenseWindowMessageListener);
+                delete window._refSenseWindowMessageListener;
+            }
+            
+            // 기존 방식 정리
+            const windowWatcher = Components.classes["@mozilla.org/embedcomp/window-watcher;1"]
+                                           .getService(Components.interfaces.nsIWindowWatcher);
+            windowWatcher.unregisterNotification(this);
+            
+            // Remove listeners from all windows
+            const windowMediator = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                                           .getService(Components.interfaces.nsIWindowMediator);
+            const windows = windowMediator.getEnumerator(null);
+            
+            while (windows.hasMoreElements()) {
+                const win = windows.getNext();
+                if (win && win._refSenseMessageListener) {
+                    win.removeEventListener('message', win._refSenseMessageListener);
+                    delete win._refSenseMessageListener;
+                }
+            }
+        } catch (error) {
+            this.log('Error during message listener cleanup:', error.message);
+        }
         
         // Clean up resources
         this.cleanup();
@@ -69,10 +617,10 @@ RefSense.Plugin = {
     // Load plugin configuration
     loadConfig() {
         this.config = {
-            ai_backend: Zotero.Prefs.get('extensions.refsense.ai_backend') || 'openai',
+            ai_backend: Zotero.Prefs.get('extensions.refsense.ai_backend') || 'ollama',
             openai_api_key: Zotero.Prefs.get('extensions.refsense.openai_api_key') || '',
             openai_model: Zotero.Prefs.get('extensions.refsense.openai_model') || 'gpt-4-turbo',
-            ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model') || 'llava:13b',
+            ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model') || 'llama3.2:latest',
             ollama_host: Zotero.Prefs.get('extensions.refsense.ollama_host') || 'http://localhost:11434',
             default_page_source: Zotero.Prefs.get('extensions.refsense.default_page_source') || 'first',
             page_range: Zotero.Prefs.get('extensions.refsense.page_range') || '1-2'
@@ -81,13 +629,32 @@ RefSense.Plugin = {
         this.log('Configuration loaded:', this.config);
     },
     
+    // Initialize UI components with retry logic
+    initUIWithRetry(attempt = 1, maxAttempts = 10) {
+        this.log(`UI initialization attempt ${attempt}/${maxAttempts}`);
+        
+        try {
+            this.initUI();
+            this.log('UI initialization completed');
+        } catch (error) {
+            this.handleError(error, `initUI attempt ${attempt}`);
+            
+            if (attempt < maxAttempts) {
+                const delay = Math.min(1000 * attempt, 10000); // Max 10 seconds
+                this.log(`Retrying UI initialization in ${delay}ms...`);
+                setTimeout(() => {
+                    this.initUIWithRetry(attempt + 1, maxAttempts);
+                }, delay);
+            } else {
+                this.log('UI initialization failed after maximum attempts');
+            }
+        }
+    },
+
     // Initialize UI components
     initUI() {
         // Add menu items to PDF reader
         this.addPDFReaderButtons();
-        
-        // Add preferences pane
-        this.addPreferencesPane();
     },
     
     // Add buttons to PDF reader toolbar
@@ -558,55 +1125,21 @@ RefSense.Plugin = {
                 // Get PDF context information
                 const pdfContext = await this.getPDFContext(reader, item);
                 
-                // Extract PDF content (Stage 3 implementation)
+                // Extract PDF content and process with AI
                 const extractionResult = await this.extractPDFContent(reader, pdfContext);
                 
-                // Validate and preprocess extracted content
-                const processedResult = this.validateAndProcessContent(extractionResult);
-                
-                // Create detailed result message
-                let resultMessage = `RefSense: PDF Content Extraction Complete\n\n`;
-                resultMessage += `Title: ${pdfContext.title}\n`;
-                resultMessage += `File: ${pdfContext.filename}\n`;
-                resultMessage += `Pages: ${pdfContext.totalPages}\n`;
-                resultMessage += `Current Page: ${pdfContext.currentPage}\n`;
-                resultMessage += `Has Parent: ${pdfContext.hasParent ? 'Yes' : 'No'}\n`;
-                if (pdfContext.hasParent) {
-                    resultMessage += `Parent Title: ${pdfContext.parentTitle}\n`;
-                }
-                resultMessage += `\n--- Content Extraction Results ---\n`;
-                resultMessage += `Method: ${extractionResult.method}\n`;
-                resultMessage += `Page Extracted: ${extractionResult.pageNumber}\n`;
-                resultMessage += `Content Type: ${extractionResult.contentType}\n`;
-                resultMessage += `Content Length: ${extractionResult.contentLength}\n`;
-                
                 if (extractionResult.success) {
-                    resultMessage += `Status: ✅ Success\n`;
-                    resultMessage += `Validation: ${processedResult.isValid ? '✅ Passed' : '❌ Failed'}\n`;
-                    if (!processedResult.isValid) {
-                        resultMessage += `Validation Issues: ${processedResult.validationIssues.join(', ')}\n`;
-                    }
-                    resultMessage += `Quality Score: ${processedResult.qualityScore}/100\n\n`;
-                    
-                    if (extractionResult.contentType === 'text') {
-                        const preview = processedResult.processedContent.substring(0, 200);
-                        resultMessage += `Processed Text Preview:\n"${preview}${processedResult.processedContent.length > 200 ? '...' : ''}"\n`;
-                        if (processedResult.detectedMetadata.length > 0) {
-                            resultMessage += `Detected Elements: ${processedResult.detectedMetadata.join(', ')}\n`;
-                        }
-                    } else if (extractionResult.contentType === 'image') {
-                        resultMessage += `Image Data: ${extractionResult.imageDataUrl ? 'Generated' : 'Failed'}\n`;
-                        resultMessage += `Image Quality: ${processedResult.imageQuality || 'Unknown'}\n`;
-                    }
-                    resultMessage += `\nNext: AI metadata extraction will be implemented in stage 4-5.`;
+                    this.log('✅ PDF content extraction and AI processing completed successfully');
                 } else {
-                    resultMessage += `Status: ❌ Failed\n`;
-                    resultMessage += `Error: ${extractionResult.error}\n\n`;
-                    resultMessage += `Please check PDF accessibility and try again.`;
+                    this.log('❌ PDF content extraction or AI processing failed:', extractionResult.error);
+                    
+                    // Show error message
+                    this.showMessage(
+                        'PDF 처리 실패',
+                        extractionResult.error || '알 수 없는 오류가 발생했습니다.',
+                        'error'
+                    );
                 }
-                
-                // Show results
-                reader._window.alert(resultMessage);
                 
             } finally {
                 // Restore buttons
@@ -672,7 +1205,7 @@ RefSense.Plugin = {
             const textResult = await this.extractTextFromPage(reader, pageToExtract);
             
             if (textResult.success && textResult.text && textResult.text.trim().length > 50) {
-                // Text extraction successful
+                // Text extraction successful, now call AI
                 result.success = true;
                 result.method = 'text';
                 result.contentType = 'text';
@@ -680,26 +1213,28 @@ RefSense.Plugin = {
                 result.contentLength = textResult.text.length;
                 this.log('Text extraction successful, length:', result.contentLength);
                 
-            } else {
-                // Text extraction failed or insufficient, try image rendering
-                this.log('Text extraction failed or insufficient, trying image rendering...');
-                const imageResult = await this.extractImageFromPage(reader, pageToExtract);
+                // Process with AI to extract metadata
+                const aiResult = await this.processWithAI(textResult.text, pdfContext);
                 
-                if (imageResult.success && imageResult.imageDataUrl) {
-                    result.success = true;
-                    result.method = 'image';
-                    result.contentType = 'image';
-                    result.imageDataUrl = imageResult.imageDataUrl;
-                    result.content = `Image data (${imageResult.width}x${imageResult.height})`;
-                    result.contentLength = imageResult.imageDataUrl.length;
-                    this.log('Image extraction successful, size:', `${imageResult.width}x${imageResult.height}`);
-                    
+                if (aiResult && aiResult.success) {
+                    // AI processing successful - create parent item
+                    await this.createParentFromMetadata(aiResult.metadata, reader, pdfContext);
+                    result.success = true; // Mark overall process as successful
                 } else {
-                    // Both methods failed
+                    // AI processing failed
                     result.success = false;
-                    result.error = `Both text and image extraction failed. Text: ${textResult.error || 'insufficient content'}, Image: ${imageResult.error || 'failed'}`;
-                    this.log('PDF content extraction failed:', result.error);
+                    result.error = aiResult ? aiResult.error : 'AI 결과가 없습니다';
+                    this.showMessage('AI 처리 실패', result.error, 'warning');
                 }
+                
+            } else {
+                // Text extraction failed or insufficient
+                result.success = false;
+                result.error = `Text extraction failed or insufficient content. Available text length: ${textResult.text ? textResult.text.length : 0}`;
+                this.log('PDF content extraction failed:', result.error);
+                
+                // Show user-friendly message
+                this.showMessage('텍스트 추출 실패', '이 PDF에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 보호된 파일일 수 있습니다.', 'warning');
             }
             
         } catch (error) {
@@ -2939,10 +3474,865 @@ RefSense.Plugin = {
         }
     },
     
-    // Add preferences pane
-    addPreferencesPane() {
-        // This will be implemented in stage 8
-        this.log('Preferences pane - to be implemented');
+    // Process text with AI to extract metadata
+    async processWithAI(text, pdfContext) {
+        const result = {
+            success: false,
+            metadata: null,
+            error: null
+        };
+        
+        try {
+            this.log('Starting AI processing with Ollama...');
+            this.log('AI Backend:', this.config.ai_backend);
+            this.log('Ollama Model:', this.config.ollama_model);
+            this.log('Ollama Host:', this.config.ollama_host);
+            
+            // Import Ollama module - inline implementation for better compatibility
+            if (!this.ollamaAPI) {
+                this.ollamaAPI = this.createOllamaAPI();
+                this.log('Ollama API module created successfully');
+            }
+            
+            // Check Ollama connection and available models
+            this.log('Checking Ollama connection...');
+            const isConnected = await this.ollamaAPI.checkConnection(this.config.ollama_host);
+            if (!isConnected) {
+                throw new Error(`Ollama 서버에 연결할 수 없습니다.\n\n확인사항:\n1. 'ollama serve' 명령으로 서버를 실행했는지 확인\n2. 호스트 주소가 정확한지 확인: ${this.config.ollama_host}`);
+            }
+            
+            this.log('Ollama connection confirmed, checking available models...');
+            
+            // Check if the model exists
+            const availableModels = await this.ollamaAPI.getAvailableModels(this.config.ollama_host);
+            this.log('Available models:', availableModels.map(m => m.name || m));
+            
+            const modelExists = availableModels.some(m => 
+                (m.name || m) === this.config.ollama_model || 
+                (m.name || m).startsWith(this.config.ollama_model.split(':')[0])
+            );
+            
+            if (!modelExists) {
+                const modelList = availableModels.map(m => m.name || m).join(', ');
+                throw new Error(`모델 '${this.config.ollama_model}'을 찾을 수 없습니다.\n\n사용 가능한 모델: ${modelList}\n\n모델 설치: ollama pull ${this.config.ollama_model}`);
+            }
+            
+            this.log('Model confirmed:', this.config.ollama_model);
+            
+            // Call Ollama API with retry
+            const metadata = await this.ollamaAPI.retryWithBackoff(async () => {
+                return await this.ollamaAPI.queryOllama(
+                    text, 
+                    this.config.ollama_model,
+                    this.config.ollama_host
+                );
+            });
+            
+            this.log('Ollama metadata extraction successful:', metadata);
+            
+            result.success = true;
+            result.metadata = metadata;
+            
+        } catch (error) {
+            this.log('AI processing failed:', error.message);
+            this.log('AI processing error stack:', error.stack);
+            result.error = error.message;
+        }
+        
+        return result;
+    },
+    
+    // Create inline Ollama API implementation
+    createOllamaAPI() {
+        return {
+            async queryOllama(text, model = 'llama3.2:latest', host = 'http://localhost:11434') {
+                return new Promise((resolve, reject) => {
+                    try {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', `${host}/api/generate`, true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+                        
+                        xhr.onreadystatechange = () => {
+                            if (xhr.readyState === 4) {
+                                if (xhr.status === 200) {
+                                    try {
+                                        const data = JSON.parse(xhr.responseText);
+                                        const result = this.parseResponse(data.response);
+                                        resolve(result);
+                                    } catch (parseError) {
+                                        reject(new Error(`응답 파싱 오류: ${parseError.message}`));
+                                    }
+                                } else {
+                                    // Include response text for better debugging
+                                    const errorDetail = xhr.responseText ? ` - ${xhr.responseText}` : '';
+                                    reject(new Error(`Ollama API 오류: ${xhr.status} ${xhr.statusText}${errorDetail}`));
+                                }
+                            }
+                        };
+                        
+                        xhr.onerror = () => {
+                            reject(new Error(`네트워크 오류: Ollama 서버에 연결할 수 없습니다. (${host})`));
+                        };
+                        
+                        xhr.ontimeout = () => {
+                            reject(new Error(`타임아웃: Ollama 서버 응답이 너무 느립니다.`));
+                        };
+                        
+                        xhr.timeout = 30000;
+                        
+                        const requestData = JSON.stringify({
+                            model: model,
+                            prompt: this.buildPrompt(text),
+                            stream: false,
+                            options: {
+                                temperature: 0.1,
+                                top_p: 0.9,
+                                num_predict: 1000
+                            }
+                        });
+                        
+                        xhr.send(requestData);
+                        
+                    } catch (error) {
+                        reject(new Error(`요청 생성 오류: ${error.message}`));
+                    }
+                });
+            },
+            
+            async checkConnection(host = 'http://localhost:11434') {
+                return new Promise((resolve) => {
+                    try {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('GET', `${host}/api/tags`, true);
+                        xhr.timeout = 5000;
+                        
+                        xhr.onreadystatechange = () => {
+                            if (xhr.readyState === 4) {
+                                resolve(xhr.status === 200);
+                            }
+                        };
+                        
+                        xhr.onerror = () => resolve(false);
+                        xhr.ontimeout = () => resolve(false);
+                        
+                        xhr.send();
+                    } catch (error) {
+                        resolve(false);
+                    }
+                });
+            },
+            
+            async getAvailableModels(host = 'http://localhost:11434') {
+                return new Promise((resolve) => {
+                    try {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('GET', `${host}/api/tags`, true);
+                        xhr.timeout = 5000;
+                        
+                        xhr.onreadystatechange = () => {
+                            if (xhr.readyState === 4) {
+                                if (xhr.status === 200) {
+                                    try {
+                                        const data = JSON.parse(xhr.responseText);
+                                        resolve(data.models || []);
+                                    } catch (error) {
+                                        resolve([]);
+                                    }
+                                } else {
+                                    resolve([]);
+                                }
+                            }
+                        };
+                        
+                        xhr.onerror = () => resolve([]);
+                        xhr.ontimeout = () => resolve([]);
+                        
+                        xhr.send();
+                    } catch (error) {
+                        resolve([]);
+                    }
+                });
+            },
+            
+            buildPrompt(text) {
+                return `다음 학술 논문의 텍스트에서 정확한 서지정보를 추출하여 JSON 형식으로 반환해주세요.
+
+텍스트:
+${text.substring(0, 3000)}
+
+다음 형식의 JSON만 반환하세요:
+{
+  "title": "논문 제목",
+  "authors": ["저자1", "저자2"],
+  "year": "출판년도",
+  "journal": "저널명",
+  "volume": "볼륨",
+  "issue": "호수",
+  "pages": "페이지",
+  "doi": "DOI",
+  "abstract": "초록 (선택사항)"
+}
+
+주의사항:
+- 정확한 정보만 추출하세요
+- 불확실한 정보는 빈 문자열로 두세요
+- JSON 형식을 정확히 지켜주세요
+- 추가 설명 없이 JSON만 반환하세요`;
+            },
+            
+            parseResponse(response) {
+                try {
+                    const jsonMatch = response.match(/\{[\s\S]*\}/);
+                    if (!jsonMatch) {
+                        throw new Error('JSON 형식을 찾을 수 없습니다');
+                    }
+
+                    const jsonStr = jsonMatch[0];
+                    const metadata = JSON.parse(jsonStr);
+
+                    return {
+                        title: metadata.title || '',
+                        authors: Array.isArray(metadata.authors) ? metadata.authors : [],
+                        year: metadata.year || '',
+                        journal: metadata.journal || '',
+                        volume: metadata.volume || '',
+                        issue: metadata.issue || '',
+                        pages: metadata.pages || '',
+                        doi: metadata.doi || '',
+                        abstract: metadata.abstract || ''
+                    };
+                } catch (error) {
+                    throw new Error('AI 응답을 파싱할 수 없습니다: ' + error.message);
+                }
+            },
+            
+            async retryWithBackoff(fn, maxRetries = 3) {
+                for (let i = 0; i < maxRetries; i++) {
+                    try {
+                        return await fn();
+                    } catch (error) {
+                        if (i === maxRetries - 1) throw error;
+                        
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
+                }
+            }
+        };
+    },
+    
+    // Create parent item from extracted metadata
+    async createParentFromMetadata(metadata, reader, pdfContext) {
+        try {
+            this.log('Creating parent item from metadata...');
+            
+            // Check if parent already exists
+            if (pdfContext.hasParent) {
+                const overwrite = confirm(
+                    `이 PDF는 이미 parent item이 있습니다: "${pdfContext.parentTitle}"\n\n` +
+                    `새로운 parent item을 생성하시겠습니까?\n\n` +
+                    `추출된 정보:\n` +
+                    `제목: ${metadata.title}\n` +
+                    `저자: ${metadata.authors.join(', ')}\n` +
+                    `연도: ${metadata.year}\n` +
+                    `저널: ${metadata.journal}`
+                );
+                
+                if (!overwrite) {
+                    this.log('User cancelled parent creation');
+                    return;
+                }
+            }
+            
+            // Validate metadata
+            if (!metadata.title || metadata.title.trim().length === 0) {
+                throw new Error('제목이 추출되지 않았습니다. 메타데이터가 불완전합니다.');
+            }
+            
+            // Create new parent item
+            const parentItem = new Zotero.Item('journalArticle');
+            
+            // Set basic fields
+            parentItem.setField('title', metadata.title.trim());
+            
+            if (metadata.year && /^\d{4}$/.test(metadata.year)) {
+                parentItem.setField('date', metadata.year);
+            }
+            
+            if (metadata.journal && metadata.journal.trim()) {
+                parentItem.setField('publicationTitle', metadata.journal.trim());
+            }
+            
+            if (metadata.volume && metadata.volume.trim()) {
+                parentItem.setField('volume', metadata.volume.trim());
+            }
+            
+            if (metadata.issue && metadata.issue.trim()) {
+                parentItem.setField('issue', metadata.issue.trim());
+            }
+            
+            if (metadata.pages && metadata.pages.trim()) {
+                parentItem.setField('pages', metadata.pages.trim());
+            }
+            
+            if (metadata.doi && metadata.doi.trim()) {
+                parentItem.setField('DOI', metadata.doi.trim());
+            }
+            
+            if (metadata.abstract && metadata.abstract.trim()) {
+                parentItem.setField('abstractNote', metadata.abstract.trim());
+            }
+            
+            // Add authors
+            if (metadata.authors && Array.isArray(metadata.authors)) {
+                for (const authorName of metadata.authors) {
+                    if (authorName && authorName.trim()) {
+                        const creator = {
+                            creatorType: 'author',
+                            name: authorName.trim()
+                        };
+                        parentItem.setCreator(parentItem.numCreators(), creator);
+                    }
+                }
+            }
+            
+            // Save parent item
+            const parentID = await parentItem.saveTx();
+            this.log('Parent item created with ID:', parentID);
+            
+            // Attach PDF to new parent
+            const pdfItem = await Zotero.Items.getAsync(reader.itemID);
+            if (pdfItem) {
+                pdfItem.parentID = parentID;
+                await pdfItem.saveTx();
+                this.log('PDF attached to new parent');
+            }
+            
+            // Show success message
+            this.showMessage(
+                'Parent 생성 완료',
+                `새로운 parent item이 생성되었습니다:\n\n` +
+                `제목: ${metadata.title}\n` +
+                `저자: ${metadata.authors.join(', ')}\n` +
+                `저널: ${metadata.journal}\n` +
+                `연도: ${metadata.year}`,
+                'success'
+            );
+            
+        } catch (error) {
+            this.handleError(error, 'createParentFromMetadata');
+            this.showMessage('Parent 생성 실패', error.message, 'error');
+        }
+    },
+    
+    // Show message to user
+    showMessage(title, message, type = 'info') {
+        try {
+            const icon = {
+                'success': '✅',
+                'warning': '⚠️', 
+                'error': '❌',
+                'info': 'ℹ️'
+            }[type] || 'ℹ️';
+            
+            alert(`${icon} ${title}\n\n${message}`);
+            
+        } catch (error) {
+            this.log('Error showing message:', error.message);
+        }
+    },
+
+    // Show preferences dialog (Zotero 7 compatible)
+    showPreferencesDialog() {
+        try {
+            const mainWindow = Zotero.getMainWindow();
+            if (!mainWindow) {
+                this.log('No main window found');
+                this.showInteractivePreferences();
+                return;
+            }
+            
+            // 먼저 테스트용 간단한 HTML 시도
+            const testURL = this.rootURI + 'preferences/test.html';
+            this.log('Testing with simple HTML at:', testURL);
+            
+            try {
+                const testDialog = mainWindow.openDialog(
+                    testURL,
+                    'refsense-test',
+                    'chrome,dialog,centerscreen,resizable,width=400,height=300',
+                    null
+                );
+                this.log('Test dialog result:', testDialog ? 'success' : 'failed');
+            } catch (testError) {
+                this.log('Test dialog error:', testError.message);
+            }
+            
+            // 실제 설정창 열기
+            const preferencesURL = this.rootURI + 'preferences/preferences.html';
+            this.log('Opening preferences with openDialog at:', preferencesURL);
+            
+            const dialog = mainWindow.openDialog(
+                preferencesURL,
+                'refsense-preferences',
+                'chrome,dialog,centerscreen,resizable,width=600,height=500',
+                null
+            );
+            
+            if (dialog) {
+                this.log('Preferences dialog opened successfully with openDialog');
+            } else {
+                this.log('openDialog failed, falling back to interactive preferences');
+                this.showInteractivePreferences();
+            }
+
+        } catch (error) {
+            this.handleError(error, 'showPreferencesDialog');
+            this.log('openDialog error, falling back to interactive preferences');
+            this.showInteractivePreferences();
+        }
+    },
+
+    // Interactive preferences using native dialogs
+    showInteractivePreferences() {
+        try {
+            // 현재 설정 상태 확인
+            const currentEncodedKey = Zotero.Prefs.get('extensions.refsense.openai_api_key');
+            const currentKey = currentEncodedKey ? atob(currentEncodedKey) : null;
+            const hasKey = currentKey && currentKey.length > 0;
+            
+            // 설정 상태 표시
+            let message = '🤖 RefSense 설정\n\n';
+            if (hasKey) {
+                message += `✅ 현재 API 키: ${currentKey.substring(0, 15)}...\n\n`;
+                message += '1. API 키 변경\n';
+                message += '2. 연결 테스트\n';
+                message += '3. 설정 확인\n';
+                message += '4. 취소\n\n';
+                message += '선택하세요 (1-4):';
+            } else {
+                message += '❌ API 키가 설정되지 않았습니다.\n\n';
+                message += 'OpenAI API 키를 설정하시겠습니까?\n';
+                message += '(확인: 설정, 취소: 나중에)';
+            }
+            
+            if (hasKey) {
+                // 기존 키가 있는 경우 - 옵션 선택
+                const choice = prompt(message);
+                
+                switch (choice) {
+                    case '1':
+                        this.changeApiKey();
+                        break;
+                    case '2':
+                        this.testApiConnection(currentKey);
+                        break;
+                    case '3':
+                        this.showCurrentSettings();
+                        break;
+                    case '4':
+                    default:
+                        // 취소
+                        break;
+                }
+            } else {
+                // 키가 없는 경우 - 직접 설정
+                if (confirm(message)) {
+                    this.changeApiKey();
+                }
+            }
+            
+        } catch (error) {
+            this.handleError(error, 'showInteractivePreferences');
+            this.showSimplePreferencesDialog();
+        }
+    },
+
+    // API 키 변경
+    changeApiKey() {
+        try {
+            const currentEncodedKey = Zotero.Prefs.get('extensions.refsense.openai_api_key');
+            const currentKey = currentEncodedKey ? atob(currentEncodedKey) : '';
+            
+            let message = 'OpenAI API 키를 입력하세요:\n\n';
+            message += '• sk-로 시작해야 합니다\n';
+            message += '• OpenAI 계정에서 발급받은 키를 사용하세요\n';
+            message += '• 취소하려면 빈 값을 입력하세요';
+            
+            const newKey = prompt(message, currentKey ? '' : 'sk-');
+            
+            if (newKey && newKey.trim()) {
+                if (!newKey.startsWith('sk-')) {
+                    alert('❌ 오류: OpenAI API 키는 sk-로 시작해야 합니다.');
+                    return;
+                }
+                
+                // 설정 저장
+                Zotero.Prefs.set('extensions.refsense.openai_api_key', btoa(newKey.trim()));
+                Zotero.Prefs.set('extensions.refsense.ai_backend', 'openai');
+                Zotero.Prefs.set('extensions.refsense.openai_model', 'gpt-4-turbo');
+                Zotero.Prefs.set('extensions.refsense.default_page_source', 'first');
+                
+                alert('✅ API 키가 저장되었습니다!\n\n이제 PDF에서 RefSense 버튼을 사용할 수 있습니다.');
+                this.log('API key saved successfully');
+                
+            } else if (newKey === '') {
+                // 취소
+                return;
+            }
+            
+        } catch (error) {
+            this.handleError(error, 'changeApiKey');
+            alert('❌ API 키 저장 중 오류가 발생했습니다.');
+        }
+    },
+
+    // API 연결 테스트
+    async testApiConnection(apiKey) {
+        try {
+            if (!apiKey) {
+                alert('❌ API 키가 설정되지 않았습니다.');
+                return;
+            }
+            
+            // 간단한 연결 테스트 (실제 API 호출 없이)
+            if (apiKey.startsWith('sk-') && apiKey.length > 40) {
+                alert('✅ API 키 형식이 올바릅니다.\n\n실제 연결 테스트는 PDF에서 RefSense 버튼을 눌러 확인하세요.');
+            } else {
+                alert('❌ API 키 형식이 올바르지 않습니다.');
+            }
+            
+        } catch (error) {
+            this.handleError(error, 'testApiConnection');
+            alert('❌ 연결 테스트 중 오류가 발생했습니다.');
+        }
+    },
+
+    // 현재 설정 표시
+    showCurrentSettings() {
+        try {
+            const settings = {
+                apiKey: Zotero.Prefs.get('extensions.refsense.openai_api_key'),
+                backend: Zotero.Prefs.get('extensions.refsense.ai_backend') || 'openai',
+                model: Zotero.Prefs.get('extensions.refsense.openai_model') || 'gpt-4-turbo',
+                pageSource: Zotero.Prefs.get('extensions.refsense.default_page_source') || 'first'
+            };
+            
+            let message = '📋 현재 RefSense 설정:\n\n';
+            message += `• AI 백엔드: ${settings.backend}\n`;
+            message += `• 모델: ${settings.model}\n`;
+            message += `• 페이지 추출: ${settings.pageSource}\n`;
+            
+            if (settings.apiKey) {
+                const decodedKey = atob(settings.apiKey);
+                message += `• API 키: ${decodedKey.substring(0, 15)}... (${decodedKey.length}자)`;
+            } else {
+                message += '• API 키: 설정되지 않음';
+            }
+            
+            alert(message);
+            
+        } catch (error) {
+            this.handleError(error, 'showCurrentSettings');
+            alert('❌ 설정 조회 중 오류가 발생했습니다.');
+        }
+    },
+
+    // HTML 내용을 문자열로 반환
+    getPreferencesHTML() {
+        return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>RefSense 설정</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 500px;
+        }
+        
+        h1 {
+            margin: 0 0 24px 0;
+            color: #333;
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #007acc;
+            box-shadow: 0 0 0 2px rgba(0,122,204,0.2);
+        }
+        
+        .help-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 32px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        
+        button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            background: white;
+        }
+        
+        button.primary {
+            background: #007acc;
+            color: white;
+            border-color: #007acc;
+        }
+        
+        button:hover {
+            background: #f0f0f0;
+        }
+        
+        button.primary:hover {
+            background: #005a9e;
+        }
+        
+        .status-message {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        
+        .status-message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status-message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 RefSense 설정</h1>
+        
+        <div id="statusMessage" class="status-message"></div>
+        
+        <div class="form-group">
+            <label for="openaiApiKey">OpenAI API 키</label>
+            <input type="password" id="openaiApiKey" placeholder="sk-...">
+            <div class="help-text">
+                OpenAI 계정에서 발급받은 API 키를 입력하세요.
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="openaiModel">모델</label>
+            <select id="openaiModel">
+                <option value="gpt-4-turbo">GPT-4 Turbo (권장)</option>
+                <option value="gpt-4">GPT-4</option>
+                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+            </select>
+        </div>
+        
+        <div class="button-group">
+            <button type="button" onclick="testConnection()">연결 테스트</button>
+            <button type="button" class="primary" onclick="saveSettings()">저장</button>
+        </div>
+    </div>
+    
+    <script>
+        console.log('RefSense 설정창 로드됨');
+        
+        // 설정 로드
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSettings();
+        });
+        
+        function loadSettings() {
+            try {
+                if (window.RefSensePlugin) {
+                    // Plugin에서 설정 로드 (향후 구현)
+                    console.log('Plugin 연결됨');
+                }
+                
+                // Zotero.Prefs에서 설정 로드
+                if (typeof Zotero !== 'undefined' && Zotero.Prefs) {
+                    const encodedKey = Zotero.Prefs.get('extensions.refsense.openai_api_key');
+                    if (encodedKey) {
+                        document.getElementById('openaiApiKey').value = atob(encodedKey);
+                    }
+                    
+                    const model = Zotero.Prefs.get('extensions.refsense.openai_model');
+                    if (model) {
+                        document.getElementById('openaiModel').value = model;
+                    }
+                }
+                
+                console.log('설정 로드 완료');
+            } catch (error) {
+                console.error('설정 로드 실패:', error);
+            }
+        }
+        
+        function saveSettings() {
+            try {
+                const apiKey = document.getElementById('openaiApiKey').value.trim();
+                
+                if (!apiKey) {
+                    showMessage('error', 'API 키를 입력해주세요.');
+                    return;
+                }
+                
+                if (!apiKey.startsWith('sk-')) {
+                    showMessage('error', 'OpenAI API 키는 sk-로 시작해야 합니다.');
+                    return;
+                }
+                
+                const model = document.getElementById('openaiModel').value;
+                
+                // Zotero.Prefs에 저장
+                if (typeof Zotero !== 'undefined' && Zotero.Prefs) {
+                    Zotero.Prefs.set('extensions.refsense.openai_api_key', btoa(apiKey));
+                    Zotero.Prefs.set('extensions.refsense.ai_backend', 'openai');
+                    Zotero.Prefs.set('extensions.refsense.openai_model', model);
+                    Zotero.Prefs.set('extensions.refsense.default_page_source', 'first');
+                    
+                    showMessage('success', 'API 키와 설정이 저장되었습니다!');
+                    console.log('설정 저장 완료');
+                } else {
+                    showMessage('error', 'Zotero.Prefs에 접근할 수 없습니다.');
+                }
+                
+            } catch (error) {
+                console.error('설정 저장 실패:', error);
+                showMessage('error', '설정 저장에 실패했습니다: ' + error.message);
+            }
+        }
+        
+        async function testConnection() {
+            try {
+                const apiKey = document.getElementById('openaiApiKey').value.trim();
+                
+                if (!apiKey) {
+                    showMessage('error', '먼저 API 키를 입력해주세요.');
+                    return;
+                }
+                
+                showMessage('info', 'OpenAI 연결을 테스트하는 중...');
+                
+                const response = await fetch('https://api.openai.com/v1/models', {
+                    headers: {
+                        'Authorization': 'Bearer ' + apiKey
+                    }
+                });
+                
+                if (response.ok) {
+                    showMessage('success', 'OpenAI 연결 성공!');
+                } else {
+                    showMessage('error', 'API 키가 유효하지 않습니다.');
+                }
+                
+            } catch (error) {
+                console.error('연결 테스트 실패:', error);
+                showMessage('error', '연결 테스트에 실패했습니다: ' + error.message);
+            }
+        }
+        
+        function showMessage(type, text) {
+            const messageDiv = document.getElementById('statusMessage');
+            messageDiv.className = 'status-message ' + type;
+            messageDiv.textContent = text;
+            messageDiv.style.display = 'block';
+            
+            if (type === 'success' || type === 'info') {
+                setTimeout(() => {
+                    messageDiv.style.display = 'none';
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>`;
+    },
+
+    // Simple preferences dialog using multiple fallback methods
+    showSimplePreferencesDialog() {
+        try {
+            // 현재 저장된 API 키 확인
+            const currentEncodedKey = Zotero.Prefs.get('extensions.refsense.openai_api_key');
+            const currentKey = currentEncodedKey ? atob(currentEncodedKey) : null;
+            const hasKey = currentKey && currentKey.length > 0;
+            
+            let message = 'RefSense API 키 설정 안내:\n\n';
+            if (hasKey) {
+                message += `현재 설정된 API 키: ${currentKey.substring(0, 15)}...\n\n`;
+                message += '새 API 키로 변경하려면 개발자 콘솔에서 다음 코드를 실행하세요:\n\n';
+            } else {
+                message += '현재 API 키가 설정되지 않았습니다.\n\n';
+                message += 'API 키를 설정하려면 개발자 콘솔(F12)에서 다음 코드를 실행하세요:\n\n';
+            }
+            
+            message += 'Zotero.Prefs.set("extensions.refsense.openai_api_key", btoa("sk-your-api-key-here"));\n';
+            message += 'Zotero.Prefs.set("extensions.refsense.ai_backend", "openai");\n';
+            message += 'Zotero.Prefs.set("extensions.refsense.openai_model", "gpt-4-turbo");\n\n';
+            message += '위 코드에서 "sk-your-api-key-here"를 실제 OpenAI API 키로 교체하세요.';
+            
+            // 알림창으로 안내 표시
+            this.showMessage('API 키 설정 안내', message, 'info');
+            
+        } catch (error) {
+            this.handleError(error, 'showSimplePreferencesDialog');
+            
+            // 최후의 수단: 콘솔 로그로 안내
+            this.log('=== RefSense API 키 설정 방법 ===');
+            this.log('개발자 콘솔에서 다음 코드를 실행하세요:');
+            this.log('Zotero.Prefs.set("extensions.refsense.openai_api_key", btoa("sk-your-api-key-here"));');
+            this.log('Zotero.Prefs.set("extensions.refsense.ai_backend", "openai");');
+            this.log('Zotero.Prefs.set("extensions.refsense.openai_model", "gpt-4-turbo");');
+            this.log('=================================');
+            
+            this.showMessage('설정 안내', '개발자 콘솔을 확인하여 API 키 설정 방법을 참고하세요.', 'info');
+        }
     },
     
     // Clean up resources
@@ -3048,6 +4438,223 @@ RefSense.Plugin = {
         const errorMessage = `[RefSense] Error${context ? ` in ${context}` : ''}: ${error.message}`;
         Zotero.debug(errorMessage);
         Zotero.debug(error.stack || 'No stack trace available');
+    },
+
+
+    // Process extracted metadata and create parent item
+    async processExtractedMetadata(metadata, pdfContext) {
+        this.log('Processing extracted metadata:', metadata);
+        
+        try {
+            // Validate metadata quality
+            if (!metadata || !metadata.title) {
+                this.showMessage('메타데이터 부족', '추출된 정보가 부족합니다. 수동으로 메타데이터를 입력해주세요.', 'warning');
+                return;
+            }
+            
+            // Check confidence level
+            if (metadata.confidence < 0.5) {
+                this.showMessage('신뢰도 낮음', '추출된 정보의 신뢰도가 낮습니다. 결과를 확인해주세요.', 'warning');
+            }
+            
+            // Create parent item
+            await this.createParentItem(metadata, pdfContext);
+            
+        } catch (error) {
+            this.handleError(error, 'processExtractedMetadata');
+            this.showMessage('메타데이터 처리 실패', `처리 중 오류가 발생했습니다: ${error.message}`, 'error');
+        }
+    },
+
+    // Create parent item from metadata (Stage 7 implementation)
+    async createParentItem(metadata, pdfContext) {
+        this.log('Creating parent item from metadata:', metadata);
+        
+        try {
+            // Get the current PDF attachment item
+            const pdfItem = await Zotero.Items.getAsync(pdfContext.itemID);
+            if (!pdfItem) {
+                throw new Error('PDF 항목을 찾을 수 없습니다');
+            }
+            
+            // Check if parent already exists
+            if (pdfItem.parentID) {
+                const existingParent = await Zotero.Items.getAsync(pdfItem.parentID);
+                if (existingParent) {
+                    this.showMessage('부모 항목 존재', '이미 상위 항목이 존재합니다. 기존 항목을 수정하시겠습니까?', 'info');
+                    return;
+                }
+            }
+            
+            // Determine item type
+            const itemType = this.determineItemType(metadata);
+            
+            // Create new item
+            const newItem = new Zotero.Item(itemType);
+            
+            // Set basic fields
+            if (metadata.title) newItem.setField('title', metadata.title);
+            if (metadata.year) newItem.setField('date', metadata.year.toString());
+            if (metadata.journal) newItem.setField('publicationTitle', metadata.journal);
+            if (metadata.volume) newItem.setField('volume', metadata.volume);
+            if (metadata.issue) newItem.setField('issue', metadata.issue);
+            if (metadata.pages) newItem.setField('pages', metadata.pages);
+            if (metadata.doi) newItem.setField('DOI', metadata.doi);
+            if (metadata.abstract) newItem.setField('abstractNote', metadata.abstract);
+            
+            // Add authors
+            if (metadata.authors && Array.isArray(metadata.authors)) {
+                for (const authorName of metadata.authors) {
+                    if (authorName && authorName.trim()) {
+                        const creator = {
+                            firstName: '',
+                            lastName: authorName.trim(),
+                            creatorType: 'author'
+                        };
+                        
+                        // Try to split name into first and last
+                        const nameParts = authorName.trim().split(/\s+/);
+                        if (nameParts.length > 1) {
+                            creator.lastName = nameParts.pop();
+                            creator.firstName = nameParts.join(' ');
+                        }
+                        
+                        newItem.setCreator(newItem.numCreators(), creator);
+                    }
+                }
+            }
+            
+            // Add tags/keywords
+            if (metadata.keywords && Array.isArray(metadata.keywords)) {
+                for (const keyword of metadata.keywords) {
+                    if (keyword && keyword.trim()) {
+                        newItem.addTag(keyword.trim());
+                    }
+                }
+            }
+            
+            // Save the new item
+            const newItemID = await newItem.saveTx();
+            this.log('New parent item created with ID:', newItemID);
+            
+            // Set PDF as child of new item
+            pdfItem.parentID = newItemID;
+            await pdfItem.saveTx();
+            
+            this.log('PDF attached to new parent item');
+            
+            // Show success message
+            this.showMessage('성공', `새로운 문헌 항목이 생성되었습니다: "${metadata.title}"`, 'success');
+            
+        } catch (error) {
+            this.handleError(error, 'createParentItem');
+            throw error;
+        }
+    },
+
+    // Determine appropriate Zotero item type
+    determineItemType(metadata) {
+        // Default to journal article
+        if (metadata.journal) {
+            return 'journalArticle';
+        }
+        
+        // Could add more logic here to detect other types
+        // (book, conference paper, etc.)
+        
+        return 'journalArticle';
+    },
+
+    // Utility Methods
+    
+    // Logging function
+    log(...args) {
+        try {
+            const timestamp = new Date().toISOString();
+            const message = `[RefSense ${timestamp}]`;
+            
+            if (typeof Zotero !== 'undefined' && Zotero.debug) {
+                Zotero.debug(`${message} ${args.join(' ')}`);
+            } else {
+                console.log(message, ...args);
+            }
+        } catch (error) {
+            console.log('[RefSense Log Error]', ...args);
+        }
+    },
+
+    // Error handling function
+    handleError(error, context) {
+        try {
+            const errorMessage = `Error in ${context}: ${error.message}`;
+            this.log('ERROR:', errorMessage);
+            this.log('Stack:', error.stack);
+            
+            if (typeof Zotero !== 'undefined' && Zotero.debug) {
+                Zotero.debug(`[RefSense Error] ${errorMessage}`, 1);
+            }
+        } catch (handlingError) {
+            console.error('[RefSense] Error handling failed:', handlingError);
+            console.error('[RefSense] Original error:', error);
+        }
+    },
+
+    // Show message to user
+    showMessage(title, message, type = 'info') {
+        try {
+            // Use Zotero's built-in notification system
+            if (typeof Zotero !== 'undefined' && Zotero.alert) {
+                // For critical messages, use alert
+                if (type === 'error') {
+                    Zotero.alert(null, title, message);
+                } else {
+                    // For info/warning/success, use the progress window system
+                    this.showProgressMessage(title, message, type);
+                }
+            } else {
+                // Fallback to browser alert
+                alert(`${title}: ${message}`);
+            }
+            
+            // Always log the message
+            this.log(`Message [${type}] ${title}: ${message}`);
+            
+        } catch (error) {
+            this.log('Failed to show message:', error.message);
+            // Ultimate fallback
+            console.log(`[RefSense ${type.toUpperCase()}] ${title}: ${message}`);
+        }
+    },
+
+    // Show progress/status message using Zotero's progress system
+    showProgressMessage(title, message, type = 'info') {
+        try {
+            if (typeof Zotero !== 'undefined' && Zotero.ProgressWindow) {
+                const progressWindow = new Zotero.ProgressWindow({ closeOnClick: true });
+                progressWindow.changeHeadline(title);
+                
+                let icon;
+                switch (type) {
+                    case 'success':
+                        icon = 'chrome://zotero/skin/tick.png';
+                        break;
+                    case 'warning':
+                        icon = 'chrome://zotero/skin/warning.png';
+                        break;
+                    case 'error':
+                        icon = 'chrome://zotero/skin/cross.png';
+                        break;
+                    default:
+                        icon = 'chrome://zotero/skin/toolbar-advanced-search.png';
+                }
+                
+                progressWindow.addDescription(message, icon);
+                progressWindow.show();
+                progressWindow.startCloseTimer(4000); // Auto-close after 4 seconds
+            }
+        } catch (error) {
+            this.log('Progress message failed:', error.message);
+        }
     }
 };
 
@@ -3057,6 +4664,12 @@ function startup({ id, version, rootURI }) {
         RefSense.Plugin.id = id;
         RefSense.Plugin.version = version;
         RefSense.Plugin.rootURI = rootURI;
+        
+        // Make sure RefSense is globally accessible after plugin loads
+        const mainWindow = Services.wm.getMostRecentWindow('navigator:browser');
+        if (mainWindow) {
+            mainWindow.RefSense = RefSense;
+        }
         
         RefSense.Plugin.startup();
     } catch (error) {

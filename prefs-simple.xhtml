@@ -1,0 +1,39 @@
+<groupbox>
+    <caption label="🤖 RefSense 설정"/>
+    
+    <grid>
+        <columns>
+            <column style="min-width: 100px;"/>
+            <column flex="1"/>
+        </columns>
+        <rows>
+            <row align="center">
+                <label control="refsense-api-key" value="API 키:"/>
+                <textbox id="refsense-api-key"
+                         preference="extensions.refsense.openai_api_key"
+                         placeholder="sk-..."
+                         style="min-width: 300px;"
+                         tabindex="1"/>
+            </row>
+            <row align="center">
+                <label control="refsense-model" value="모델:"/>
+                <menulist id="refsense-model"
+                          preference="extensions.refsense.openai_model"
+                          tabindex="2">
+                    <menupopup>
+                        <menuitem label="GPT-4 Turbo (권장)" value="gpt-4-turbo"/>
+                        <menuitem label="GPT-4" value="gpt-4"/>
+                        <menuitem label="GPT-3.5 Turbo" value="gpt-3.5-turbo"/>
+                    </menupopup>
+                </menulist>
+            </row>
+        </rows>
+    </grid>
+    
+    <separator/>
+    
+    <description>
+        OpenAI 계정에서 발급받은 API 키를 입력하세요.
+        PDF 리더에서 Ctrl+Shift+E 또는 RefSense 버튼을 사용하세요.
+    </description>
+</groupbox>

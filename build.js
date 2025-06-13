@@ -79,6 +79,38 @@ async function copySourceFiles() {
         console.log('Copied source files');
     }
     
+    // Copy AI modules
+    const aiPath = './ai';
+    const aiDest = path.join(BUILD_CONFIG.buildDir, 'ai');
+    if (fs.existsSync(aiPath)) {
+        copyDirectory(aiPath, aiDest);
+        console.log('Copied ai directory');
+    }
+    
+    // Copy config files
+    const configPath = './config';
+    const configDest = path.join(BUILD_CONFIG.buildDir, 'config');
+    if (fs.existsSync(configPath)) {
+        copyDirectory(configPath, configDest);
+        console.log('Copied config directory');
+    }
+    
+    // Copy UI files
+    const uiPath = './ui';
+    const uiDest = path.join(BUILD_CONFIG.buildDir, 'ui');
+    if (fs.existsSync(uiPath)) {
+        copyDirectory(uiPath, uiDest);
+        console.log('Copied ui directory');
+    }
+    
+    // Copy preferences files
+    const preferencesPath = './preferences';
+    const preferencesDest = path.join(BUILD_CONFIG.buildDir, 'preferences');
+    if (fs.existsSync(preferencesPath)) {
+        copyDirectory(preferencesPath, preferencesDest);
+        console.log('Copied preferences directory');
+    }
+    
     // Copy bootstrap.js to root
     const bootstrapPath = './bootstrap.js';
     const bootstrapDest = path.join(BUILD_CONFIG.buildDir, 'bootstrap.js');
@@ -86,6 +118,42 @@ async function copySourceFiles() {
     if (fs.existsSync(bootstrapPath)) {
         fs.copyFileSync(bootstrapPath, bootstrapDest);
         console.log('Copied bootstrap.js');
+    }
+    
+    // Copy prefs.js to root (Zotero 7 default preferences)
+    const prefsPath = './prefs.js';
+    const prefsDest = path.join(BUILD_CONFIG.buildDir, 'prefs.js');
+    
+    if (fs.existsSync(prefsPath)) {
+        fs.copyFileSync(prefsPath, prefsDest);
+        console.log('Copied prefs.js');
+    }
+    
+    // Copy prefs.xhtml to root
+    const prefsXhtmlPath = './prefs.xhtml';
+    const prefsXhtmlDest = path.join(BUILD_CONFIG.buildDir, 'prefs.xhtml');
+    
+    if (fs.existsSync(prefsXhtmlPath)) {
+        fs.copyFileSync(prefsXhtmlPath, prefsXhtmlDest);
+        console.log('Copied prefs.xhtml');
+    }
+    
+    // Copy prefs-simple.xhtml to root
+    const prefsSimplePath = './prefs-simple.xhtml';
+    const prefsSimpleDest = path.join(BUILD_CONFIG.buildDir, 'prefs-simple.xhtml');
+    
+    if (fs.existsSync(prefsSimplePath)) {
+        fs.copyFileSync(prefsSimplePath, prefsSimpleDest);
+        console.log('Copied prefs-simple.xhtml');
+    }
+    
+    // Copy preferences.js to root
+    const preferencesJsPath = './preferences.js';
+    const preferencesJsDest = path.join(BUILD_CONFIG.buildDir, 'preferences.js');
+    
+    if (fs.existsSync(preferencesJsPath)) {
+        fs.copyFileSync(preferencesJsPath, preferencesJsDest);
+        console.log('Copied preferences.js');
     }
 }
 
