@@ -3924,20 +3924,24 @@ ${text.substring(0, 3000)}
             
             // Check if parent already exists
             if (pdfContext.hasParent) {
-                const overwrite = confirm(
-                    `이 PDF는 이미 parent item이 있습니다: "${pdfContext.parentTitle}"\n\n` +
-                    `새로운 parent item을 생성하시겠습니까?\n\n` +
-                    `추출된 정보:\n` +
-                    `제목: ${metadata.title}\n` +
-                    `저자: ${metadata.authors.join(', ')}\n` +
-                    `연도: ${metadata.year}\n` +
-                    `저널: ${metadata.journal}`
-                );
+                const userChoice = this.showParentUpdateDialog(pdfContext.parentTitle, metadata);
                 
-                if (!overwrite) {
-                    this.log('User cancelled parent creation');
+                if (userChoice === 'cancel') {
+                    this.log('User cancelled parent creation/update');
                     return;
+                } else if (userChoice === 'update') {
+                    // Store new metadata for comparison
+                    this.currentNewMetadata = metadata;
+                    // Show detailed comparison and get user selection
+                    const updateSelection = await this.showMetadataComparisonDialog(pdfContext.parentID, metadata);
+                    if (updateSelection) {
+                        return await this.updateExistingParentSelective(pdfContext.parentID, updateSelection);
+                    } else {
+                        this.log('User cancelled metadata comparison');
+                        return;
+                    }
                 }
+                // If userChoice === 'new', continue with creating new parent
             }
             
             // Validate metadata
@@ -4850,6 +4854,484 @@ ${text.substring(0, 3000)}
             }
         } catch (error) {
             this.log('Progress message failed:', error.message);
+        }
+    },
+
+    // Show dialog for parent item update options
+    showParentUpdateDialog(existingTitle, metadata) {
+        const dialog = Services.prompt;
+        const title = "기존 Parent Item 발견";
+        const message = 
+            `이 PDF는 이미 parent item이 있습니다:\n` +
+            `"${existingTitle}"\n\n` +
+            `새로 추출된 정보:\n` +
+            `제목: ${metadata.title}\n` +
+            `저자: ${metadata.authors.join(', ')}\n` +
+            `연도: ${metadata.year}\n` +
+            `저널: ${metadata.journal}\n\n` +
+            `어떻게 처리하시겠습니까?`;
+
+        const buttons = ["기존 정보 업데이트", "새 Parent 생성", "취소"];
+        
+        try {
+            const result = dialog.confirmEx(
+                null, // parent window
+                title,
+                message,
+                (dialog.BUTTON_TITLE_IS_STRING * dialog.BUTTON_POS_0) +
+                (dialog.BUTTON_TITLE_IS_STRING * dialog.BUTTON_POS_1) +
+                (dialog.BUTTON_TITLE_IS_STRING * dialog.BUTTON_POS_2),
+                buttons[0], // button 0 text
+                buttons[1], // button 1 text  
+                buttons[2], // button 2 text
+                null, // checkbox text
+                {} // checkbox state
+            );
+            
+            switch (result) {
+                case 0: return 'update';   // 기존 정보 업데이트
+                case 1: return 'new';      // 새 Parent 생성
+                case 2: return 'cancel';   // 취소
+                default: return 'cancel';
+            }
+        } catch (error) {
+            this.log('Dialog error, falling back to simple confirm:', error.message);
+            // Fallback to simple confirm dialog
+            const simpleChoice = confirm(
+                `${message}\n\n기존 정보를 업데이트하시겠습니까?\n` +
+                `(취소하면 새 Parent를 생성합니다)`
+            );
+            return simpleChoice ? 'update' : 'new';
+        }
+    },
+
+    // Update existing parent item with new metadata
+    async updateExistingParent(parentID, metadata) {
+        try {
+            this.log(`Updating existing parent item: ${parentID}`);
+            
+            const parentItem = await Zotero.Items.getAsync(parentID);
+            if (!parentItem) {
+                throw new Error('기존 parent item을 찾을 수 없습니다.');
+            }
+
+            // Start transaction
+            await Zotero.DB.executeTransaction(async () => {
+                // Update basic fields
+                if (metadata.title && metadata.title.trim()) {
+                    parentItem.setField('title', metadata.title.trim());
+                }
+                
+                if (metadata.year && metadata.year.toString().trim()) {
+                    parentItem.setField('date', metadata.year.toString().trim());
+                }
+                
+                if (metadata.journal && metadata.journal.trim()) {
+                    parentItem.setField('publicationTitle', metadata.journal.trim());
+                }
+                
+                if (metadata.doi && metadata.doi.trim()) {
+                    parentItem.setField('DOI', metadata.doi.trim());
+                }
+                
+                if (metadata.abstract && metadata.abstract.trim()) {
+                    parentItem.setField('abstractNote', metadata.abstract.trim());
+                }
+                
+                if (metadata.pages && metadata.pages.trim()) {
+                    parentItem.setField('pages', metadata.pages.trim());
+                }
+                
+                if (metadata.volume && metadata.volume.trim()) {
+                    parentItem.setField('volume', metadata.volume.trim());
+                }
+                
+                if (metadata.issue && metadata.issue.trim()) {
+                    parentItem.setField('issue', metadata.issue.trim());
+                }
+
+                // Clear existing creators and add new ones
+                if (metadata.authors && metadata.authors.length > 0) {
+                    parentItem.setCreators([]);
+                    
+                    for (const authorName of metadata.authors) {
+                        if (authorName && authorName.trim()) {
+                            const creator = {
+                                creatorType: 'author',
+                                name: authorName.trim()
+                            };
+                            
+                            // Try to split name into first/last if it contains comma or multiple words
+                            const nameParts = authorName.trim().split(/,\s*|\s+/);
+                            if (nameParts.length >= 2) {
+                                creator.lastName = nameParts[0];
+                                creator.firstName = nameParts.slice(1).join(' ');
+                                delete creator.name;
+                            }
+                            
+                            parentItem.setCreator(parentItem.numCreators(), creator);
+                        }
+                    }
+                }
+
+                // Save the item
+                await parentItem.save();
+                
+                this.log('Parent item updated successfully');
+                this.showMessage(
+                    '정보 업데이트 완료',
+                    `기존 parent item이 새로운 정보로 업데이트되었습니다.\n\n제목: ${metadata.title}`,
+                    'success'
+                );
+                
+                return parentItem;
+            });
+
+        } catch (error) {
+            this.error('Failed to update existing parent:', error);
+            this.showMessage(
+                '업데이트 실패',
+                `기존 parent item 업데이트 중 오류가 발생했습니다: ${error.message}`,
+                'error'
+            );
+            throw error;
+        }
+    },
+
+    // Get metadata from existing parent item
+    async getExistingParentMetadata(parentID) {
+        try {
+            const parentItem = await Zotero.Items.getAsync(parentID);
+            if (!parentItem) {
+                throw new Error('Parent item not found');
+            }
+
+            const metadata = {
+                title: parentItem.getField('title') || '',
+                year: parentItem.getField('date') || '',
+                journal: parentItem.getField('publicationTitle') || '',
+                doi: parentItem.getField('DOI') || '',
+                abstract: parentItem.getField('abstractNote') || '',
+                pages: parentItem.getField('pages') || '',
+                volume: parentItem.getField('volume') || '',
+                issue: parentItem.getField('issue') || '',
+                authors: []
+            };
+
+            // Get authors
+            const creators = parentItem.getCreators();
+            for (const creator of creators) {
+                if (creator.creatorType === 'author') {
+                    if (creator.name) {
+                        metadata.authors.push(creator.name);
+                    } else if (creator.firstName && creator.lastName) {
+                        metadata.authors.push(`${creator.firstName} ${creator.lastName}`);
+                    } else if (creator.lastName) {
+                        metadata.authors.push(creator.lastName);
+                    }
+                }
+            }
+
+            return metadata;
+        } catch (error) {
+            this.error('Failed to get existing parent metadata:', error);
+            throw error;
+        }
+    },
+
+    // Show metadata comparison dialog with field-by-field selection
+    async showMetadataComparisonDialog(parentID, newMetadata) {
+        try {
+            const existingMetadata = await this.getExistingParentMetadata(parentID);
+            
+            // Create comparison window
+            const window = Services.wm.getMostRecentWindow('navigator:browser');
+            const dialog = window.openDialog(
+                'data:application/vnd.mozilla.xul+xml;charset=utf-8,' + encodeURIComponent(`
+                <?xml version="1.0"?>
+                <dialog xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+                        title="메타데이터 비교 선택"
+                        width="800"
+                        height="600"
+                        buttons="accept,cancel"
+                        buttonlabelaccept="선택한 항목 적용"
+                        buttonlabelcancel="취소">
+                    
+                    <script><![CDATA[
+                        function toggleRow(fieldName) {
+                            const radio1 = document.getElementById('existing_' + fieldName);
+                            const radio2 = document.getElementById('new_' + fieldName);
+                            const row = document.getElementById('row_' + fieldName);
+                            
+                            if (radio1.selected) {
+                                row.style.backgroundColor = '#e8f4f8';
+                            } else if (radio2.selected) {
+                                row.style.backgroundColor = '#f0f8e8';
+                            }
+                        }
+                        
+                        function getSelectedFields() {
+                            const results = {};
+                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
+                            
+                            for (const field of fields) {
+                                const existingRadio = document.getElementById('existing_' + field);
+                                const newRadio = document.getElementById('new_' + field);
+                                
+                                if (existingRadio && existingRadio.selected) {
+                                    results[field] = 'existing';
+                                } else if (newRadio && newRadio.selected) {
+                                    results[field] = 'new';
+                                }
+                            }
+                            
+                            window.arguments[0] = results;
+                        }
+                        
+                        window.addEventListener('dialogaccept', getSelectedFields);
+                    ]]></script>
+                    
+                    <vbox flex="1" style="padding: 10px;">
+                        <description style="font-weight: bold; margin-bottom: 10px;">
+                            각 필드에서 사용할 값을 선택하세요:
+                        </description>
+                        
+                        <grid flex="1">
+                            <columns>
+                                <column flex="1"/>
+                                <column flex="2"/>
+                                <column flex="2"/>
+                            </columns>
+                            
+                            <rows>
+                                <row style="background-color: #f0f0f0; font-weight: bold;">
+                                    <label value="필드"/>
+                                    <label value="기존 값"/>
+                                    <label value="새로 추출된 값"/>
+                                </row>
+                                ${this.createComparisonRows(existingMetadata, newMetadata)}
+                            </rows>
+                        </grid>
+                        
+                        <hbox style="margin-top: 15px;">
+                            <button label="모두 기존 값" oncommand="selectAllExisting()"/>
+                            <button label="모두 새 값" oncommand="selectAllNew()"/>
+                        </hbox>
+                    </vbox>
+                    
+                    <script><![CDATA[
+                        function selectAllExisting() {
+                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
+                            for (const field of fields) {
+                                const radio = document.getElementById('existing_' + field);
+                                if (radio) {
+                                    radio.selected = true;
+                                    toggleRow(field);
+                                }
+                            }
+                        }
+                        
+                        function selectAllNew() {
+                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
+                            for (const field of fields) {
+                                const radio = document.getElementById('new_' + field);
+                                if (radio) {
+                                    radio.selected = true;
+                                    toggleRow(field);
+                                }
+                            }
+                        }
+                        
+                        // Default to new values
+                        window.addEventListener('load', function() {
+                            selectAllNew();
+                        });
+                    ]]></script>
+                </dialog>
+                `),
+                '_blank',
+                'chrome,dialog,modal,resizable',
+                {}
+            );
+
+            // Wait for dialog result
+            return new Promise((resolve) => {
+                dialog.addEventListener('unload', () => {
+                    resolve(dialog.arguments[0] || null);
+                });
+            });
+
+        } catch (error) {
+            this.error('Failed to show comparison dialog:', error);
+            // Fallback: return all new values
+            return {
+                title: 'new',
+                authors: 'new', 
+                year: 'new',
+                journal: 'new',
+                doi: 'new',
+                abstract: 'new',
+                pages: 'new',
+                volume: 'new',
+                issue: 'new'
+            };
+        }
+    },
+
+    // Create comparison rows for the dialog
+    createComparisonRows(existing, newData) {
+        const fields = [
+            { key: 'title', label: '제목' },
+            { key: 'authors', label: '저자' },
+            { key: 'year', label: '연도' },
+            { key: 'journal', label: '저널' },
+            { key: 'doi', label: 'DOI' },
+            { key: 'abstract', label: '초록' },
+            { key: 'pages', label: '페이지' },
+            { key: 'volume', label: '볼륨' },
+            { key: 'issue', label: '이슈' }
+        ];
+
+        return fields.map(field => {
+            const existingValue = field.key === 'authors' 
+                ? (existing[field.key] || []).join(', ') 
+                : (existing[field.key] || '');
+            const newValue = field.key === 'authors'
+                ? (newData[field.key] || []).join(', ')
+                : (newData[field.key] || '');
+
+            const truncateText = (text, maxLength = 50) => {
+                return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+            };
+
+            return `
+                <row id="row_${field.key}" style="padding: 5px; border-bottom: 1px solid #ddd;">
+                    <label value="${field.label}" style="font-weight: bold;"/>
+                    <vbox>
+                        <radio id="existing_${field.key}" 
+                               label="${truncateText(existingValue) || '(비어있음)'}"
+                               oncommand="toggleRow('${field.key}')"
+                               tooltiptext="${existingValue}"/>
+                    </vbox>
+                    <vbox>
+                        <radio id="new_${field.key}"
+                               label="${truncateText(newValue) || '(비어있음)'}"
+                               oncommand="toggleRow('${field.key}')"
+                               tooltiptext="${newValue}"/>
+                    </vbox>
+                </row>
+            `;
+        }).join('');
+    },
+
+    // Update existing parent with selective fields
+    async updateExistingParentSelective(parentID, selection) {
+        try {
+            this.log(`Updating existing parent item selectively: ${parentID}`);
+            
+            const parentItem = await Zotero.Items.getAsync(parentID);
+            const existingMetadata = await this.getExistingParentMetadata(parentID);
+            
+            if (!parentItem) {
+                throw new Error('기존 parent item을 찾을 수 없습니다.');
+            }
+
+            // Determine final values based on selection
+            const finalValues = {};
+            const fields = ['title', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue', 'authors'];
+            
+            for (const field of fields) {
+                if (selection[field] === 'existing') {
+                    finalValues[field] = existingMetadata[field];
+                } else {
+                    finalValues[field] = this.currentNewMetadata[field]; // Store new metadata for reference
+                }
+            }
+
+            // Start transaction
+            await Zotero.DB.executeTransaction(async () => {
+                // Update basic fields only if they were selected as 'new'
+                if (selection.title === 'new' && finalValues.title && finalValues.title.trim()) {
+                    parentItem.setField('title', finalValues.title.trim());
+                }
+                
+                if (selection.year === 'new' && finalValues.year && finalValues.year.toString().trim()) {
+                    parentItem.setField('date', finalValues.year.toString().trim());
+                }
+                
+                if (selection.journal === 'new' && finalValues.journal && finalValues.journal.trim()) {
+                    parentItem.setField('publicationTitle', finalValues.journal.trim());
+                }
+                
+                if (selection.doi === 'new' && finalValues.doi && finalValues.doi.trim()) {
+                    parentItem.setField('DOI', finalValues.doi.trim());
+                }
+                
+                if (selection.abstract === 'new' && finalValues.abstract && finalValues.abstract.trim()) {
+                    parentItem.setField('abstractNote', finalValues.abstract.trim());
+                }
+                
+                if (selection.pages === 'new' && finalValues.pages && finalValues.pages.trim()) {
+                    parentItem.setField('pages', finalValues.pages.trim());
+                }
+                
+                if (selection.volume === 'new' && finalValues.volume && finalValues.volume.trim()) {
+                    parentItem.setField('volume', finalValues.volume.trim());
+                }
+                
+                if (selection.issue === 'new' && finalValues.issue && finalValues.issue.trim()) {
+                    parentItem.setField('issue', finalValues.issue.trim());
+                }
+
+                // Update authors only if selected as 'new'
+                if (selection.authors === 'new' && finalValues.authors && finalValues.authors.length > 0) {
+                    parentItem.setCreators([]);
+                    
+                    for (const authorName of finalValues.authors) {
+                        if (authorName && authorName.trim()) {
+                            const creator = {
+                                creatorType: 'author',
+                                name: authorName.trim()
+                            };
+                            
+                            // Try to split name into first/last if it contains comma or multiple words
+                            const nameParts = authorName.trim().split(/,\s*|\s+/);
+                            if (nameParts.length >= 2) {
+                                creator.lastName = nameParts[0];
+                                creator.firstName = nameParts.slice(1).join(' ');
+                                delete creator.name;
+                            }
+                            
+                            parentItem.setCreator(parentItem.numCreators(), creator);
+                        }
+                    }
+                }
+
+                // Save the item
+                await parentItem.save();
+                
+                this.log('Parent item updated selectively');
+                
+                // Count updated fields
+                const updatedFields = Object.values(selection).filter(val => val === 'new').length;
+                
+                this.showMessage(
+                    '선택적 업데이트 완료',
+                    `${updatedFields}개 필드가 새로운 정보로 업데이트되었습니다.`,
+                    'success'
+                );
+                
+                return parentItem;
+            });
+
+        } catch (error) {
+            this.error('Failed to update existing parent selectively:', error);
+            this.showMessage(
+                '선택적 업데이트 실패',
+                `선택적 업데이트 중 오류가 발생했습니다: ${error.message}`,
+                'error'
+            );
+            throw error;
         }
     }
 };

@@ -1,25 +1,110 @@
 # RefSense - AI Metadata Extractor for Zotero
 
-A Zotero 7 plugin that extracts bibliographic metadata from PDF files using AI (OpenAI GPT or local Ollama models).
+A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files using AI (OpenAI GPT or local Ollama models) and intelligently manages parent items.
 
-## Features
+## ✨ Features
 
-- 🔘 **PDF Reader Integration**: Extract metadata directly from PDF viewer
-- 🤖 **AI-Powered Extraction**: Support for OpenAI GPT-4 and local Ollama/LLaVA models  
-- 📄 **Flexible Page Selection**: First page, current page, or custom range
-- 🔍 **Text & Image Processing**: OCR text extraction with image fallback
-- 📥 **Automatic Parent Creation**: Generate Zotero items with extracted metadata
-- ⚙️ **Configurable Settings**: Customize AI backend, models, and extraction options
+### 🔘 **PDF Reader Integration**
+- **Floating Button**: "📄 RefSense" button automatically appears in PDF reader
+- **Keyboard Shortcut**: Ctrl+Shift+E for quick access
+- **Auto-Detection**: Automatically detects PDF reader windows
 
-## Installation
+### 🤖 **AI-Powered Extraction**
+- **OpenAI GPT-4 Turbo**: High-precision metadata extraction
+- **Local Ollama Models**: Privacy-focused local processing
+- **Smart Prompting**: Optimized prompts for academic paper analysis
+- **Robust Error Handling**: Retry logic with exponential backoff
+
+### 📄 **Advanced PDF Processing**
+- **Multi-Method Text Extraction**: 6 different extraction methods for maximum compatibility
+- **Quality Validation**: Binary filtering and academic content scoring
+- **Flexible Page Selection**: First page, current page, or custom range
+- **Fallback System**: Comprehensive text extraction with quality verification
+
+### 🧠 **Intelligent Parent Item Management**
+- **Duplicate Detection**: Checks for existing parent items
+- **Smart Update Options**: 3-choice dialog (Update/Create New/Cancel)
+- **Field-by-Field Comparison**: Visual side-by-side metadata comparison
+- **Selective Updates**: Choose which fields to update with radio buttons
+- **Batch Operations**: "Select All Existing" or "Select All New" options
+
+### 📥 **Seamless Zotero Integration**
+- **Automatic Parent Creation**: Generate Zotero items with extracted metadata
+- **PDF Linking**: Establish proper parent-child relationships
+- **Transaction Management**: Database integrity with rollback support
+- **Field Mapping**: Complete mapping to Zotero fields (title, authors, year, journal, DOI, etc.)
+
+### ⚙️ **Comprehensive Settings**
+- **Dynamic UI**: Backend-specific settings sections
+- **API Key Management**: Secure Base64 encoding and masking
+- **Connection Testing**: Validate API connectivity
+- **Model Selection**: Choose from available AI models
+
+## 🚀 Quick Start
+
+### Installation
 
 1. Download the latest `.xpi` file from the releases page
-2. In Zotero 7, go to Tools → Add-ons
-3. Click the gear icon and select "Install Add-on From File"
+2. In Zotero 7, go to **Tools → Add-ons**
+3. Click the gear icon and select **"Install Add-on From File"**
 4. Select the downloaded `.xpi` file
 5. Restart Zotero
 
-## Development
+### Configuration
+
+1. Go to **Tools → Add-ons → RefSense → Options**
+2. Choose your AI backend (OpenAI or Ollama)
+3. Configure API keys and model settings
+4. Test connection to ensure everything works
+
+### Basic Usage
+
+1. **Open a PDF** in Zotero's PDF reader
+2. **Click the RefSense button** (📄) or press **Ctrl+Shift+E**
+3. **Wait for AI processing** - metadata will be extracted automatically
+4. **Choose your action**:
+   - If no parent exists: Review and confirm metadata
+   - If parent exists: Choose to update, create new, or cancel
+5. **For updates**: Use the comparison dialog to select which fields to update
+6. **Confirm** - parent item will be created or updated
+
+## 🔧 Advanced Features
+
+### Field-by-Field Metadata Comparison
+
+When updating existing parent items, RefSense shows a detailed comparison dialog:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ 메타데이터 비교 선택                                       │
+│                                                        │
+│ ┌─────────┬─────────────────┬─────────────────────────┐   │
+│ │ Field   │ Existing Value  │ New Extracted Value     │   │
+│ ├─────────┼─────────────────┼─────────────────────────┤   │
+│ │ Title   │ ○ Old Title     │ ● New Extracted Title   │   │
+│ │ Authors │ ○ John Doe      │ ● Jane Smith, Bob Lee   │   │
+│ │ Year    │ ○ 2023          │ ● 2024                  │   │
+│ │ Journal │ ○ (empty)       │ ● Nature Science        │   │
+│ └─────────┴─────────────────┴─────────────────────────┘   │
+│                                                        │
+│ [Select All Existing] [Select All New]                 │
+│                           [Apply Selected] [Cancel]    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Supported AI Models
+
+**OpenAI**:
+- GPT-4 Turbo (recommended)
+- GPT-4
+- GPT-3.5 Turbo
+
+**Ollama** (local):
+- LLaVA models
+- Llama models with vision capabilities
+- Custom local models
+
+## 🛠️ Development
 
 ### Prerequisites
 
@@ -47,44 +132,88 @@ npm run dev
 
 ```
 zotero-refsense/
-├── manifest.json          # Extension manifest
-├── package.json          # Node.js package configuration
-├── build.js             # Build script
-├── src/
-│   ├── bootstrap.js     # Plugin initialization
-│   ├── content.js       # PDF reader integration
-│   └── ...
-├── config/              # Configuration files
-├── ui/                  # User interface components
-├── ai/                  # AI integration modules
-└── utils/               # Utility functions
+├── manifest.json              # Zotero 7 Extension manifest
+├── package.json              # npm package configuration
+├── bootstrap.js              # Main plugin file
+├── build.js                  # XPI build script
+├── ai/                       # AI communication modules
+│   ├── openai.js            # OpenAI API integration
+│   └── ollama.js            # Ollama API integration
+├── config/                   # Configuration system
+│   ├── settings.js          # Settings management
+│   └── prefs.xhtml          # Settings UI
+├── build/                    # Build output
+│   └── refsense.xpi         # Installable XPI package
+└── CLAUDE.md                 # Development documentation
 ```
 
-## Configuration
+## 📋 Configuration Options
 
-The plugin supports the following configuration options:
+### AI Backend Settings
 
-- **AI Backend**: Choose between OpenAI or Ollama
-- **API Keys**: OpenAI API key for GPT models
-- **Models**: Select specific models (e.g., gpt-4-turbo, llava:13b)
-- **Page Extraction**: Configure which pages to process
-- **Ollama Host**: Local Ollama server URL
+```json
+{
+  "ai_backend": "openai",               // "openai" or "ollama"
+  "openai_api_key": "sk-...",          // OpenAI API key
+  "openai_model": "gpt-4-turbo",       // OpenAI model
+  "ollama_model": "llava:13b",         // Ollama model
+  "ollama_host": "http://localhost:11434", // Ollama server
+  "default_page_source": "first",      // "first", "current", "range"
+  "page_range": "1–2"                  // Page range for extraction
+}
+```
 
-## Usage
+### Page Extraction Options
 
-1. Open a PDF in Zotero's PDF reader
-2. Click the "Extract Metadata" button in the toolbar
-3. Review the extracted metadata
-4. Confirm to create the parent item
+- **First Page**: Extract from the first page (default, recommended for papers)
+- **Current Page**: Extract from currently viewed page
+- **Page Range**: Extract from specified page range (e.g., "1-3")
 
-## License
+## 🔍 How It Works
 
-MIT License - see LICENSE file for details
+1. **PDF Text Extraction**: Uses 6 different methods including Zotero's Fulltext API, cache files, and database queries
+2. **Quality Validation**: Filters binary content and scores academic relevance
+3. **AI Processing**: Sends optimized prompts to chosen AI backend
+4. **Metadata Parsing**: Converts AI JSON response to Zotero fields
+5. **Smart Handling**: Detects existing parents and offers intelligent update options
+6. **Database Integration**: Uses Zotero's transaction system for data integrity
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please read the contributing guidelines before submitting PRs.
+Contributions are welcome! Please:
 
-## Support
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
-For issues and feature requests, please use the GitHub issue tracker.
+## 📄 License
+
+MIT License - see LICENSE file for details.
+
+## 🆘 Support
+
+- **Issues**: Use the GitHub issue tracker
+- **Documentation**: See CLAUDE.md for detailed development info
+- **Discussions**: GitHub Discussions for questions and ideas
+
+## 🔒 Privacy & Security
+
+- **OpenAI**: Only sends PDF text content (first page typically contains public bibliographic info)
+- **Ollama**: Completely local processing, no data transmitted externally
+- **API Keys**: Stored locally with Base64 encoding
+- **No Tracking**: No usage analytics or data collection
+
+## 🎯 Roadmap
+
+- [ ] Batch processing for multiple PDFs
+- [ ] Advanced duplicate detection across entire library
+- [ ] Custom field mapping options
+- [ ] Integration with additional AI providers
+- [ ] Enhanced OCR capabilities
+- [ ] Multi-language support
+
+---
+
+**RefSense** - Making academic research more efficient with AI-powered metadata extraction.
