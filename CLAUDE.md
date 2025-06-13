@@ -325,9 +325,29 @@ zotero-refsense/
 - Ollama는 로컬 기반으로 개인정보 전송 우려 없음
 - Scholar 스크래핑은 절대 사용하지 않음 (CrossRef / OpenAlex 등 공식 API만 사용)
 
+## 📋 추가 설계 문서
+
+- **`design-notes.md`** - 상세한 기술적 설계 고려사항
+  - 🖼️ PDF 이미지 추출 및 OCR 전략 (향후 스캔 PDF 지원)
+  - 🛠️ 번들링 도구 (Rollup) 도입 검토 및 결론
+
 ---
 
 ## 📄 최근 업데이트 내역
+
+### 2025-06-13: 📋 **설계 문서 정리 및 구조화** - design-notes.md 분리
+**📚 문서 체계 개선:**
+- **파일명 수정**: `desidn-notes.md` → `design-notes.md` (오타 수정)
+- **설계 문서 분리**: CLAUDE.md에서 기술적 설계 고려사항을 별도 파일로 이동
+- **문서 구조화**: 두 개의 주요 설계 토픽을 design-notes.md에 통합
+
+**📁 design-notes.md 구성:**
+- **🖼️ PDF Page Rendering and Image Extraction**: 향후 스캔 PDF 지원을 위한 이미지 추출 및 OCR 전략
+- **🛠️ 번들링 도구 (Rollup) 도입 검토**: 모듈 구조 유지 결정 및 향후 고려사항
+
+**🔗 문서 연계:**
+- CLAUDE.md에 "추가 설계 문서" 섹션 추가
+- 개발자들이 상세한 기술적 설계 고려사항을 design-notes.md에서 참조 가능
 
 ### 2025-06-13: 🎉 **모듈화 리팩토링 완료** - Zotero 7 호환 아키텍처 구현
 **📊 대규모 코드 리팩토링 성과:**

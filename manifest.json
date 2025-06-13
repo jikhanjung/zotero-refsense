@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "description": "Extract bibliographic metadata from PDF files using AI (OpenAI or Ollama)",
   "author": "zotero-refsense",
-  "homepage_url": "https://github.com/your-username/zotero-refsense",
+  "homepage_url": "https://github.com/jikhanjung/zotero-refsense",
   
   "applications": {
     "zotero": {
       "id": "refsense@zotero-plugin",
-      "update_url": "https://github.com/your-username/zotero-refsense/releases/latest/download/update.rdf",
+      "update_url": "https://github.com/jikhanjung/zotero-refsense/releases/latest/download/update.rdf",
       "strict_min_version": "7.0.0",
       "strict_max_version": "7.*"
     }
