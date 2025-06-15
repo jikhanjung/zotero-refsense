@@ -780,8 +780,8 @@ RefSense.Plugin = {
                 openaiApiKey: Zotero.Prefs.get('extensions.refsense.openaiApiKey') || '',
                 
                 // Ollama 설정
-                ollamaModel: Zotero.Prefs.get('extensions.refsense.ollamaModel') || 'llama3.2:latest',
-                ollamaHost: Zotero.Prefs.get('extensions.refsense.ollamaHost') || 'http://localhost:11434',
+                ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model') || 'llama3.2:latest',
+                ollama_host: Zotero.Prefs.get('extensions.refsense.ollama_host') || 'http://localhost:11434',
                 
                 // PDF 추출 설정
                 defaultPageSource: Zotero.Prefs.get('extensions.refsense.defaultPageSource') || 'first',
@@ -814,8 +814,8 @@ RefSense.Plugin = {
                 aiBackend: 'openai',
                 openaiModel: 'gpt-4-turbo',
                 openaiApiKey: '',
-                ollamaModel: 'llama3.2:latest',
-                ollamaHost: 'http://localhost:11434',
+                ollama_model: 'llama3.2:latest',
+                ollama_host: 'http://localhost:11434',
                 defaultPageSource: 'first',
                 pageRange: '1-2',
                 enableLogging: true,
@@ -1129,6 +1129,12 @@ RefSense.Plugin = {
                 return;
             }
             
+            // Check if PDF already has a parent item
+            if (this.hasParentItem(reader)) {
+                this.log('PDF already has parent item - not showing RefSense button');
+                return;
+            }
+            
             // Create floating button with minimal dependencies
             const btn = doc.createElement('div');
             btn.id = 'refsense-simple-btn';
@@ -1180,6 +1186,39 @@ RefSense.Plugin = {
             
         } catch (error) {
             this.handleError(error, 'insertSimpleFloatingButton');
+        }
+    },
+
+    // Check if PDF attachment already has a parent item
+    hasParentItem(reader) {
+        try {
+            if (!reader || !reader.itemID) {
+                this.log('No reader or itemID available for parent check');
+                return false;
+            }
+
+            // Get the PDF attachment item
+            const pdfItem = Zotero.Items.get(reader.itemID);
+            if (!pdfItem) {
+                this.log('Could not find PDF item with ID:', reader.itemID);
+                return false;
+            }
+
+            // Check if it has a parent item
+            const hasParent = pdfItem.parentItemID && pdfItem.parentItemID > 0;
+            
+            this.log(`PDF item ${reader.itemID} parent check:`, {
+                itemID: reader.itemID,
+                parentItemID: pdfItem.parentItemID,
+                hasParent: hasParent
+            });
+
+            return hasParent;
+            
+        } catch (error) {
+            this.log('Error checking parent item:', error.message);
+            // If error occurs, show button to be safe
+            return false;
         }
     },
     
@@ -1413,9 +1452,35 @@ RefSense.Plugin = {
                 const aiResult = await this.processWithAI(textResult.text, pdfContext);
                 
                 if (aiResult && aiResult.success) {
-                    // AI processing successful - create parent item
-                    await this.createParentFromMetadata(aiResult.metadata, reader, pdfContext);
-                    result.success = true; // Mark overall process as successful
+                    // AI processing successful - handle based on parent existence
+                    if (pdfContext.hasParent) {
+                        this.log('Parent item exists, showing comparison dialog for user decision');
+                        // Parent exists, show comparison dialog for user decision
+                        const userDecision = await this.handleExistingParent(aiResult.metadata, reader, pdfContext);
+                        
+                        if (userDecision.success) {
+                            result.success = true;
+                        } else {
+                            result.success = false;
+                            result.error = userDecision.error || '사용자가 취소했습니다';
+                            this.log('User cancelled or operation failed');
+                        }
+                    } else {
+                        this.log('No parent item, showing metadata preview');
+                        // No parent exists, show preview first
+                        const userConfirmed = await this.showMetadataPreview(aiResult.metadata, pdfContext);
+                        
+                        if (userConfirmed) {
+                            // User confirmed - create parent item
+                            await this.createParentFromMetadata(userConfirmed.metadata, reader, pdfContext);
+                            result.success = true; // Mark overall process as successful
+                        } else {
+                            // User cancelled
+                            result.success = false;
+                            result.error = '사용자가 취소했습니다';
+                            this.log('User cancelled metadata creation');
+                        }
+                    }
                 } else {
                     // AI processing failed
                     result.success = false;
@@ -1473,30 +1538,41 @@ RefSense.Plugin = {
             
             // Try multiple text extraction methods in priority order
             const extractionMethods = [
-                () => this.extractViaZoteroAPI(reader, pageNumber),  // 1. Zotero Fulltext (highest priority)
-                () => this.extractViaZoteroReader(reader, pageNumber),  // 2. Direct Reader API
-                () => this.extractViaPDFJS(reader, pageNumber),  // 3. PDF.js wrappedJSObject
-                () => this.extractViaTextLayer(reader, pageNumber),  // 4. DOM textLayer
-                () => this.extractViaDocumentSelection(reader, pageNumber),  // 5. Document selection
-                () => this.extractViaFileSystemAccess(reader, pageNumber)  // 6. File system (lowest priority)
+                { name: '1. Zotero Fulltext API', func: () => this.extractViaZoteroAPI(reader, pageNumber) },
+                { name: '2. Direct Reader API', func: () => this.extractViaZoteroReader(reader, pageNumber) },
+                { name: '3. PDF.js wrappedJSObject', func: () => this.extractViaPDFJS(reader, pageNumber) },
+                { name: '4. DOM textLayer', func: () => this.extractViaTextLayer(reader, pageNumber) },
+                { name: '5. Document selection', func: () => this.extractViaDocumentSelection(reader, pageNumber) },
+                { name: '6. File system access', func: () => this.extractViaFileSystemAccess(reader, pageNumber) }
             ];
             
-            for (const method of extractionMethods) {
+            this.log('=== 텍스트 추출 시도 시작 ===');
+            
+            for (let i = 0; i < extractionMethods.length; i++) {
+                const { name, func } = extractionMethods[i];
                 try {
-                    const methodResult = await method();
+                    this.log(`🔄 시도 중: ${name}`);
+                    const methodResult = await func();
+                    
                     if (methodResult.success && methodResult.text && methodResult.text.length > 20) {
-                        this.log('Text extraction successful via method, length:', methodResult.text.length);
+                        this.log(`✅ 성공: ${name} - 텍스트 길이: ${methodResult.text.length}자`);
+                        this.log(`📄 텍스트 미리보기: "${methodResult.text.substring(0, 100)}..."`);
+                        this.log('=== 텍스트 추출 완료 ===');
                         return methodResult;
                     } else if (methodResult.text) {
-                        this.log('Method returned text but too short:', methodResult.text.length);
+                        this.log(`⚠️ 부분 성공: ${name} - 텍스트가 너무 짧음 (${methodResult.text.length}자)`);
+                        this.log(`📄 짧은 텍스트: "${methodResult.text}"`);
+                    } else {
+                        this.log(`❌ 실패: ${name} - 텍스트 없음`);
                     }
                 } catch (error) {
-                    this.log('Extraction method failed:', error.message);
+                    this.log(`❌ 오류: ${name} - ${error.message}`);
                 }
             }
             
             result.error = 'All text extraction methods failed';
-            this.log('Text extraction failed: all methods exhausted');
+            this.log('❌ 모든 텍스트 추출 방법 실패');
+            this.log('=== 텍스트 추출 실패 ===');
             
         } catch (error) {
             result.error = error.message;
@@ -2184,59 +2260,94 @@ RefSense.Plugin = {
         const result = { success: false, text: '', error: null };
         
         try {
+            this.log('[Zotero API] 시작: Zotero Fulltext API 사용');
+            
             // Try to access the PDF via Zotero's internal systems
             if (typeof Zotero !== 'undefined' && Zotero.Fulltext) {
+                this.log('[Zotero API] Zotero.Fulltext 사용 가능');
                 const item = await Zotero.Items.getAsync(reader.itemID);
                 if (item && item.isAttachment()) {
-                    this.log('Attempting Zotero Fulltext extraction for item:', item.id);
+                    this.log(`[Zotero API] PDF 아이템 확인됨: ID ${item.id}`);
                     
                     // Try multiple fulltext methods
                     const methods = [
-                        () => Zotero.Fulltext.getItemContent(item.libraryID, item.id),
-                        () => Zotero.Fulltext.getPages(item.libraryID, item.id),
-                        () => Zotero.Fulltext.getIndexStats(item.id),
-                        () => Zotero.Fulltext.findTextInItems([item.id], '')
+                        { name: 'getItemContent', func: () => Zotero.Fulltext.getItemContent(item.libraryID, item.id) },
+                        { name: 'getPages', func: () => Zotero.Fulltext.getPages(item.libraryID, item.id) },
+                        { name: 'getIndexStats', func: () => Zotero.Fulltext.getIndexStats(item.id) },
+                        { name: 'findTextInItems', func: () => Zotero.Fulltext.findTextInItems([item.id], '') }
                     ];
                     
-                    for (const method of methods) {
+                    for (const { name, func } of methods) {
                         try {
-                            const fulltext = await method();
-                            this.log('Fulltext result:', fulltext ? 'Found' : 'Empty', typeof fulltext);
+                            this.log(`[Zotero API] 시도: ${name}`);
+                            const fulltext = await func();
+                            this.log(`[Zotero API] ${name} 결과:`, fulltext ? 'Found' : 'Empty', typeof fulltext);
                             
                             if (fulltext && fulltext.content && fulltext.content.trim().length > 50) {
                                 const content = fulltext.content.trim();
                                 result.success = true;
                                 result.text = content.substring(0, 5000); // Reasonable limit
-                                this.log('Zotero Fulltext extraction successful, length:', content.length);
+                                this.log(`[Zotero API] ✅ ${name} 성공: ${content.length}자`);
                                 return result;
                             } else if (fulltext && typeof fulltext === 'string' && fulltext.trim().length > 50) {
                                 result.success = true;
                                 result.text = fulltext.trim().substring(0, 5000);
-                                this.log('Zotero Fulltext string extraction successful');
+                                this.log(`[Zotero API] ✅ ${name} 문자열 성공: ${fulltext.length}자`);
                                 return result;
+                            } else {
+                                this.log(`[Zotero API] ❌ ${name} 실패: 텍스트 부족`);
                             }
                         } catch (methodError) {
-                            this.log('Fulltext method failed:', methodError.message);
+                            this.log(`[Zotero API] ❌ ${name} 오류: ${methodError.message}`);
                         }
                     }
                     
                     // Try to trigger fulltext indexing if not available
                     try {
-                        this.log('Attempting to trigger fulltext indexing...');
+                        this.log('[Zotero API] 인덱싱 시도 중...');
                         await Zotero.Fulltext.indexItems([item.id]);
                         
                         // Wait a bit and try again
+                        this.log('[Zotero API] 인덱싱 후 2초 대기...');
                         await new Promise(resolve => setTimeout(resolve, 2000));
                         
-                        const fulltextRetry = await Zotero.Fulltext.getItemContent(item.libraryID, item.id);
-                        if (fulltextRetry && fulltextRetry.content && fulltextRetry.content.trim().length > 50) {
-                            result.success = true;
-                            result.text = fulltextRetry.content.trim().substring(0, 5000);
-                            this.log('Zotero Fulltext extraction successful after indexing');
-                            return result;
+                        this.log('[Zotero API] 인덱싱 후 재시도...');
+                        
+                        // Try different methods since getItemContent doesn't exist
+                        const retryMethods = [
+                            { name: 'DB-query', func: async () => {
+                                const sql = "SELECT content FROM fulltextContent WHERE itemID = ?";
+                                const content = await Zotero.DB.valueQueryAsync(sql, [item.id]);
+                                return content ? { content: content } : null;
+                            }},
+                            { name: 'getPages-retry', func: () => Zotero.Fulltext.getPages(item.libraryID, item.id) },
+                            { name: 'findTextInItems-retry', func: () => Zotero.Fulltext.findTextInItems([item.id], '') }
+                        ];
+                        
+                        for (const { name, func } of retryMethods) {
+                            try {
+                                this.log(`[Zotero API] 재시도: ${name}`);
+                                const retryResult = await func();
+                                this.log(`[Zotero API] ${name} 결과:`, retryResult ? 'Found' : 'Empty', typeof retryResult);
+                                
+                                if (retryResult && retryResult.content && retryResult.content.trim().length > 50) {
+                                    result.success = true;
+                                    result.text = retryResult.content.trim().substring(0, 5000);
+                                    this.log(`[Zotero API] ✅ ${name} 인덱싱 후 성공: ${retryResult.content.length}자`);
+                                    return result;
+                                } else if (retryResult && typeof retryResult === 'string' && retryResult.trim().length > 50) {
+                                    result.success = true;
+                                    result.text = retryResult.trim().substring(0, 5000);
+                                    this.log(`[Zotero API] ✅ ${name} 인덱싱 후 문자열 성공: ${retryResult.length}자`);
+                                    return result;
+                                }
+                            } catch (retryError) {
+                                this.log(`[Zotero API] ❌ ${name} 재시도 오류: ${retryError.message}`);
+                            }
                         }
+                        
                     } catch (indexError) {
-                        this.log('Fulltext indexing failed:', indexError.message);
+                        this.log('[Zotero API] ❌ 인덱싱 실패:', indexError.message);
                     }
                 }
             }
@@ -3866,13 +3977,17 @@ ${text.substring(0, 3000)}
   "issue": "호수",
   "pages": "페이지",
   "doi": "DOI",
-  "abstract": "초록 (선택사항)"
+  "abstract": "초록 전문 - 있다면 반드시 포함"
 }
 
 주의사항:
 - 정확한 정보만 추출하세요
 - 불확실한 정보는 빈 문자열로 두세요
 - JSON 형식을 정확히 지켜주세요
+- 저자명은 반드시 배열로 반환하세요 - 각 저자를 개별 요소로 분리
+- 저자가 여러 명인 경우 모두 별개의 배열 항목으로 추가하세요
+- 초록(abstract)이 있다면 반드시 완전하게 추출하세요 - 매우 중요합니다
+- 초록은 요약하지 말고 원문 그대로 추출하세요
 - 추가 설명 없이 JSON만 반환하세요`;
             },
             
@@ -3916,33 +4031,49 @@ ${text.substring(0, 3000)}
             }
         };
     },
-    
-    // Create parent item from extracted metadata
-    async createParentFromMetadata(metadata, reader, pdfContext) {
+
+    // Handle existing parent item workflow
+    async handleExistingParent(metadata, reader, pdfContext) {
         try {
-            this.log('Creating parent item from metadata...');
+            this.log('🔵 [DEBUG] Handling existing parent item workflow');
+            this.log('🔵 [DEBUG] Parent ID:', pdfContext.parentID);
+            this.log('🔵 [DEBUG] New metadata:', metadata);
             
-            // Check if parent already exists
-            if (pdfContext.hasParent) {
-                const userChoice = this.showParentUpdateDialog(pdfContext.parentTitle, metadata);
-                
-                if (userChoice === 'cancel') {
-                    this.log('User cancelled parent creation/update');
-                    return;
-                } else if (userChoice === 'update') {
-                    // Store new metadata for comparison
-                    this.currentNewMetadata = metadata;
-                    // Show detailed comparison and get user selection
-                    const updateSelection = await this.showMetadataComparisonDialog(pdfContext.parentID, metadata);
-                    if (updateSelection) {
-                        return await this.updateExistingParentSelective(pdfContext.parentID, updateSelection);
-                    } else {
-                        this.log('User cancelled metadata comparison');
-                        return;
-                    }
-                }
-                // If userChoice === 'new', continue with creating new parent
+            // Store new metadata for comparison
+            this.currentNewMetadata = metadata;
+            
+            this.log('🔵 [DEBUG] About to show comparison dialog...');
+            // Show comparison dialog directly
+            const updateSelection = await this.showMetadataComparisonDialog(pdfContext.parentID, metadata);
+            this.log('🔵 [DEBUG] Update selection result:', updateSelection);
+            
+            if (updateSelection && updateSelection !== 'create_new') {
+                // User chose to update existing parent
+                this.log('🔵 [DEBUG] User chose to update, calling updateExistingParentSelective...');
+                await this.updateExistingParentSelective(pdfContext.parentID, updateSelection);
+                this.log('🔵 [DEBUG] Update completed successfully');
+                return { success: true };
+            } else if (updateSelection === 'create_new') {
+                // User chose to create new parent
+                this.log('🔵 [DEBUG] User chose to create new parent instead of updating');
+                await this.createNewParent(metadata, reader, pdfContext);
+                return { success: true };
+            } else {
+                // User cancelled
+                this.log('🔵 [DEBUG] User cancelled metadata comparison');
+                return { success: false, error: '사용자가 취소했습니다' };
             }
+            
+        } catch (error) {
+            this.handleError(error, 'handleExistingParent');
+            return { success: false, error: error.message };
+        }
+    },
+
+    // Create new parent item (extracted from createParentFromMetadata)
+    async createNewParent(metadata, reader, pdfContext) {
+        try {
+            this.log('Creating new parent item...');
             
             // Validate metadata
             if (!metadata.title || metadata.title.trim().length === 0) {
@@ -3987,10 +4118,16 @@ ${text.substring(0, 3000)}
             if (metadata.authors && Array.isArray(metadata.authors)) {
                 for (const authorName of metadata.authors) {
                     if (authorName && authorName.trim()) {
-                        const creator = {
-                            creatorType: 'author',
-                            name: authorName.trim()
-                        };
+                        const creator = this.parseAuthorName(authorName.trim());
+                        parentItem.setCreator(parentItem.numCreators(), creator);
+                    }
+                }
+            } else if (metadata.authors && typeof metadata.authors === 'string') {
+                // Fallback: if authors is a string, try to split it
+                const authorsList = this.parseAuthorsString(metadata.authors);
+                for (const authorName of authorsList) {
+                    if (authorName && authorName.trim()) {
+                        const creator = this.parseAuthorName(authorName.trim());
                         parentItem.setCreator(parentItem.numCreators(), creator);
                     }
                 }
@@ -3998,7 +4135,7 @@ ${text.substring(0, 3000)}
             
             // Save parent item
             const parentID = await parentItem.saveTx();
-            this.log('Parent item created with ID:', parentID);
+            this.log('New parent item created with ID:', parentID);
             
             // Attach PDF to new parent
             const pdfItem = await Zotero.Items.getAsync(reader.itemID);
@@ -4009,19 +4146,43 @@ ${text.substring(0, 3000)}
             }
             
             // Show success message
-            this.showMessage(
-                'Parent 생성 완료',
-                `새로운 parent item이 생성되었습니다:\n\n` +
+            const abstractInfo = metadata.abstract && metadata.abstract.trim() ? `초록: ${metadata.abstract.substring(0, 100)}${metadata.abstract.length > 100 ? '...' : ''}` : '';
+            let successMessage = `새로운 parent item이 생성되었습니다:\n\n` +
                 `제목: ${metadata.title}\n` +
                 `저자: ${metadata.authors.join(', ')}\n` +
                 `저널: ${metadata.journal}\n` +
-                `연도: ${metadata.year}`,
+                `연도: ${metadata.year}`;
+            
+            if (abstractInfo) {
+                successMessage += `\n${abstractInfo}`;
+            }
+            
+            this.showMessage(
+                'Parent 생성 완료',
+                successMessage,
                 'success'
             );
             
         } catch (error) {
-            this.handleError(error, 'createParentFromMetadata');
+            this.handleError(error, 'createNewParent');
             this.showMessage('Parent 생성 실패', error.message, 'error');
+            throw error;
+        }
+    },
+    
+    // Create parent item from extracted metadata (for new parent only)
+    async createParentFromMetadata(metadata, reader, pdfContext) {
+        try {
+            this.log('Creating parent item from metadata (new parent only)...');
+            
+            // This function is now only used when there's no existing parent
+            // Existing parent handling is done in handleExistingParent()
+            
+            await this.createNewParent(metadata, reader, pdfContext);
+            
+        } catch (error) {
+            this.handleError(error, 'createParentFromMetadata');
+            throw error;
         }
     },
     
@@ -4040,6 +4201,84 @@ ${text.substring(0, 3000)}
         } catch (error) {
             this.log('Error showing message:', error.message);
         }
+    },
+
+    // Parse a single author name into firstName and lastName
+    parseAuthorName(fullName) {
+        if (!fullName || !fullName.trim()) {
+            return {
+                creatorType: 'author',
+                name: ''
+            };
+        }
+
+        const name = fullName.trim();
+        
+        // Check for comma-separated format: "Last, First"
+        if (name.includes(',')) {
+            const parts = name.split(',').map(part => part.trim());
+            if (parts.length >= 2 && parts[0] && parts[1]) {
+                return {
+                    creatorType: 'author',
+                    lastName: parts[0],
+                    firstName: parts[1]
+                };
+            }
+        }
+        
+        // Check for typical Western format: "First Last" or "First Middle Last"
+        const parts = name.split(/\s+/);
+        if (parts.length >= 2) {
+            const lastName = parts[parts.length - 1];
+            const firstName = parts.slice(0, -1).join(' ');
+            
+            if (firstName && lastName) {
+                return {
+                    creatorType: 'author',
+                    lastName: lastName,
+                    firstName: firstName
+                };
+            }
+        }
+        
+        // Fallback: use as single name field (for names that don't follow typical patterns)
+        return {
+            creatorType: 'author',
+            name: name
+        };
+    },
+
+    // Parse authors from a string (fallback for non-array responses)
+    parseAuthorsString(authorsString) {
+        if (!authorsString || typeof authorsString !== 'string') {
+            return [];
+        }
+
+        const authors = [];
+        
+        // Try different separators
+        const separators = [';', ',', ' and ', ' & ', '\n'];
+        let authorsList = [authorsString.trim()];
+        
+        for (const separator of separators) {
+            if (authorsString.includes(separator)) {
+                authorsList = authorsString.split(separator).map(author => author.trim());
+                break;
+            }
+        }
+        
+        // Clean up and filter
+        for (const author of authorsList) {
+            const cleanAuthor = author.trim();
+            if (cleanAuthor && 
+                cleanAuthor.length > 1 && 
+                !cleanAuthor.toLowerCase().includes('et al') &&
+                !/^\d+$/.test(cleanAuthor)) {
+                authors.push(cleanAuthor);
+            }
+        }
+        
+        return authors;
     },
 
     // Show preferences dialog (Zotero 7 compatible)
@@ -5042,192 +5281,229 @@ ${text.substring(0, 3000)}
     // Show metadata comparison dialog with field-by-field selection
     async showMetadataComparisonDialog(parentID, newMetadata) {
         try {
+            this.log('🟡 [DEBUG] Starting metadata comparison dialog for parent ID:', parentID);
             const existingMetadata = await this.getExistingParentMetadata(parentID);
+            this.log('🟡 [DEBUG] Existing metadata:', existingMetadata);
+            this.log('🟡 [DEBUG] New metadata:', newMetadata);
             
-            // Create comparison window
-            const window = Services.wm.getMostRecentWindow('navigator:browser');
-            const dialog = window.openDialog(
-                'data:application/vnd.mozilla.xul+xml;charset=utf-8,' + encodeURIComponent(`
-                <?xml version="1.0"?>
-                <dialog xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
-                        title="메타데이터 비교 선택"
-                        width="800"
-                        height="600"
-                        buttons="accept,cancel"
-                        buttonlabelaccept="선택한 항목 적용"
-                        buttonlabelcancel="취소">
-                    
-                    <script><![CDATA[
-                        function toggleRow(fieldName) {
-                            const radio1 = document.getElementById('existing_' + fieldName);
-                            const radio2 = document.getElementById('new_' + fieldName);
-                            const row = document.getElementById('row_' + fieldName);
-                            
-                            if (radio1.selected) {
-                                row.style.backgroundColor = '#e8f4f8';
-                            } else if (radio2.selected) {
-                                row.style.backgroundColor = '#f0f8e8';
-                            }
+            // Create HTML-based comparison dialog for Zotero 7
+            const comparisonContent = this.createComparisonContent(existingMetadata, newMetadata);
+            this.log('🟡 [DEBUG] Comparison content created, about to show dialog...');
+            
+            // Use custom dialog system with delay to ensure document is ready
+            const result = await new Promise((resolve) => {
+                const dialogData = {
+                    title: '기존 Parent Item 업데이트',
+                    content: comparisonContent,
+                    buttons: [
+                        { label: '새 Parent 생성', action: 'cancel' },
+                        { label: '모두 기존 값', action: 'all_existing' },
+                        { label: '모두 새 값', action: 'all_new' },
+                        { label: '선택한 항목 적용', action: 'apply', default: true }
+                    ],
+                    wide: true,
+                    callback: (action, contentElement) => {
+                        if (action === 'apply') {
+                            // Collect user selections
+                            const selections = this.collectFieldSelections(contentElement);
+                            resolve(selections);
+                            return true; // Close dialog
+                        } else if (action === 'all_existing') {
+                            // Select all existing values
+                            this.selectAllFields('existing', contentElement);
+                            return false; // Don't close dialog
+                        } else if (action === 'all_new') {
+                            // Select all new values
+                            this.selectAllFields('new', contentElement);
+                            return false; // Don't close dialog
+                        } else {
+                            resolve('create_new'); // Create new parent instead
+                            return true; // Close dialog
                         }
-                        
-                        function getSelectedFields() {
-                            const results = {};
-                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
-                            
-                            for (const field of fields) {
-                                const existingRadio = document.getElementById('existing_' + field);
-                                const newRadio = document.getElementById('new_' + field);
-                                
-                                if (existingRadio && existingRadio.selected) {
-                                    results[field] = 'existing';
-                                } else if (newRadio && newRadio.selected) {
-                                    results[field] = 'new';
-                                }
-                            }
-                            
-                            window.arguments[0] = results;
-                        }
-                        
-                        window.addEventListener('dialogaccept', getSelectedFields);
-                    ]]></script>
-                    
-                    <vbox flex="1" style="padding: 10px;">
-                        <description style="font-weight: bold; margin-bottom: 10px;">
-                            각 필드에서 사용할 값을 선택하세요:
-                        </description>
-                        
-                        <grid flex="1">
-                            <columns>
-                                <column flex="1"/>
-                                <column flex="2"/>
-                                <column flex="2"/>
-                            </columns>
-                            
-                            <rows>
-                                <row style="background-color: #f0f0f0; font-weight: bold;">
-                                    <label value="필드"/>
-                                    <label value="기존 값"/>
-                                    <label value="새로 추출된 값"/>
-                                </row>
-                                ${this.createComparisonRows(existingMetadata, newMetadata)}
-                            </rows>
-                        </grid>
-                        
-                        <hbox style="margin-top: 15px;">
-                            <button label="모두 기존 값" oncommand="selectAllExisting()"/>
-                            <button label="모두 새 값" oncommand="selectAllNew()"/>
-                        </hbox>
-                    </vbox>
-                    
-                    <script><![CDATA[
-                        function selectAllExisting() {
-                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
-                            for (const field of fields) {
-                                const radio = document.getElementById('existing_' + field);
-                                if (radio) {
-                                    radio.selected = true;
-                                    toggleRow(field);
-                                }
-                            }
-                        }
-                        
-                        function selectAllNew() {
-                            const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
-                            for (const field of fields) {
-                                const radio = document.getElementById('new_' + field);
-                                if (radio) {
-                                    radio.selected = true;
-                                    toggleRow(field);
-                                }
-                            }
-                        }
-                        
-                        // Default to new values
-                        window.addEventListener('load', function() {
-                            selectAllNew();
-                        });
-                    ]]></script>
-                </dialog>
-                `),
-                '_blank',
-                'chrome,dialog,modal,resizable',
-                {}
-            );
-
-            // Wait for dialog result
-            return new Promise((resolve) => {
-                dialog.addEventListener('unload', () => {
-                    resolve(dialog.arguments[0] || null);
-                });
+                    }
+                };
+                
+                // Add small delay to ensure DOM is ready
+                setTimeout(() => {
+                    this.showCustomDialog(dialogData);
+                }, 100);
             });
-
+            
+            this.log('🟡 [DEBUG] Dialog closed, result:', result);
+            return result;
+            
         } catch (error) {
-            this.error('Failed to show comparison dialog:', error);
-            // Fallback: return all new values
-            return {
-                title: 'new',
-                authors: 'new', 
-                year: 'new',
-                journal: 'new',
-                doi: 'new',
-                abstract: 'new',
-                pages: 'new',
-                volume: 'new',
-                issue: 'new'
-            };
+            this.handleError(error, 'showMetadataComparisonDialog');
+            
+            // Show error to user and don't update anything
+            this.showMessage(
+                '비교 대화상자 오류',
+                '메타데이터 비교 대화상자를 표시하는 중 오류가 발생했습니다. 기존 정보는 변경되지 않습니다.',
+                'error'
+            );
+            
+            // Return null to cancel operation
+            return null;
         }
     },
 
-    // Create comparison rows for the dialog
-    createComparisonRows(existing, newData) {
-        const fields = [
-            { key: 'title', label: '제목' },
-            { key: 'authors', label: '저자' },
-            { key: 'year', label: '연도' },
-            { key: 'journal', label: '저널' },
-            { key: 'doi', label: 'DOI' },
-            { key: 'abstract', label: '초록' },
-            { key: 'pages', label: '페이지' },
-            { key: 'volume', label: '볼륨' },
-            { key: 'issue', label: '이슈' }
-        ];
+    // Create HTML-based comparison content for Zotero 7
+    createComparisonContent(existing, newData) {
+        try {
+            const fields = [
+                { key: 'title', label: '제목' },
+                { key: 'authors', label: '저자' },
+                { key: 'year', label: '연도' },
+                { key: 'journal', label: '저널' },
+                { key: 'doi', label: 'DOI' },
+                { key: 'abstract', label: '초록' },
+                { key: 'pages', label: '페이지' },
+                { key: 'volume', label: '볼륨' },
+                { key: 'issue', label: '이슈' }
+            ];
 
-        return fields.map(field => {
-            const existingValue = field.key === 'authors' 
-                ? (existing[field.key] || []).join(', ') 
-                : (existing[field.key] || '');
-            const newValue = field.key === 'authors'
-                ? (newData[field.key] || []).join(', ')
-                : (newData[field.key] || '');
+        const truncateText = (text, maxLength = 80) => {
+            return text && text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+        };
 
-            const truncateText = (text, maxLength = 50) => {
-                return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
-            };
+        const formatValue = (value, fieldKey) => {
+            if (fieldKey === 'authors' && Array.isArray(value)) {
+                return value.join(', ');
+            }
+            return value || '';
+        };
+
+        const escapeHtml = (text) => {
+            if (!text) return '';
+            try {
+                return text.toString()
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;')
+                    .replace(/\n/g, ' ')           // Replace newlines with spaces
+                    .replace(/\r/g, ' ')           // Replace carriage returns
+                    .replace(/\t/g, ' ')           // Replace tabs
+                    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Remove ASCII + Latin-1 control chars
+                    .replace(/[\u2000-\u200F\u2028-\u202F]/g, ' ') // Replace Unicode whitespace
+                    .replace(/[\uFEFF\uFFFE\uFFFF]/g, '') // Remove BOM and other problematic chars
+                    .replace(/[\uD800-\uDFFF]/g, ''); // Remove unpaired surrogate characters
+            } catch (error) {
+                this.log('🟡 [ERROR] HTML escaping failed:', error.message);
+                return String(text).replace(/[<>&"']/g, ''); // Fallback: basic cleanup
+            }
+        };
+
+        const rowsHTML = fields.map(field => {
+            const existingValue = formatValue(existing[field.key], field.key);
+            const newValue = formatValue(newData[field.key], field.key);
+            const existingDisplay = escapeHtml(truncateText(existingValue) || '(비어있음)');
+            const newDisplay = escapeHtml(truncateText(newValue) || '(비어있음)');
+            const existingTitle = escapeHtml(existingValue);
+            const newTitle = escapeHtml(newValue);
 
             return `
-                <row id="row_${field.key}" style="padding: 5px; border-bottom: 1px solid #ddd;">
-                    <label value="${field.label}" style="font-weight: bold;"/>
-                    <vbox>
-                        <radio id="existing_${field.key}" 
-                               label="${truncateText(existingValue) || '(비어있음)'}"
-                               oncommand="toggleRow('${field.key}')"
-                               tooltiptext="${existingValue}"/>
-                    </vbox>
-                    <vbox>
-                        <radio id="new_${field.key}"
-                               label="${truncateText(newValue) || '(비어있음)'}"
-                               oncommand="toggleRow('${field.key}')"
-                               tooltiptext="${newValue}"/>
-                    </vbox>
-                </row>
+                <tr class="comparison-row" data-field="${field.key}">
+                    <td style="font-weight: bold; padding: 8px; border-right: 1px solid #ddd; background: #f5f5f5;">
+                        ${field.label}
+                    </td>
+                    <td style="padding: 8px; border-right: 1px solid #ddd;">
+                        <label style="display: flex; align-items: center; cursor: pointer;">
+                            <input type="radio" name="field_${field.key}" value="existing" style="margin-right: 8px;">
+                            <span title="${existingTitle}" style="color: ${existingValue ? '#333' : '#999'}; ${existingValue ? '' : 'font-style: italic;'}">
+                                ${existingDisplay}
+                            </span>
+                        </label>
+                    </td>
+                    <td style="padding: 8px;">
+                        <label style="display: flex; align-items: center; cursor: pointer;">
+                            <input type="radio" name="field_${field.key}" value="new" style="margin-right: 8px;" checked>
+                            <span title="${newTitle}" style="color: ${newValue ? '#333' : '#999'}; ${newValue ? '' : 'font-style: italic;'}">
+                                ${newDisplay}
+                            </span>
+                        </label>
+                    </td>
+                </tr>
             `;
         }).join('');
+
+        return `
+            <div style="margin-bottom: 15px; padding: 10px; background: #e8f4f8; border-radius: 5px;">
+                <div style="font-weight: bold; margin-bottom: 5px;">기존 정보와 AI 추출 정보 비교</div>
+                <div style="font-size: 0.9em; color: #666;">이 PDF에는 이미 Parent Item이 있습니다. 각 필드에서 사용할 값을 선택하세요.</div>
+                <div style="font-size: 0.9em; color: #666; margin-top: 5px;">기본적으로 새로 추출된 값이 선택되어 있습니다.</div>
+            </div>
+            
+            <div style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f0f0f0; font-weight: bold;">
+                            <th style="padding: 10px; text-align: left; width: 20%; border-right: 1px solid #ddd;">필드</th>
+                            <th style="padding: 10px; text-align: left; width: 40%; border-right: 1px solid #ddd;">기존 값</th>
+                            <th style="padding: 10px; text-align: left; width: 40%;">새로 추출된 값</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHTML}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div style="margin-top: 15px; text-align: center; font-size: 0.9em; color: #666;">
+                <strong>팁:</strong> 각 행을 클릭하여 선택하거나, 상단 버튼으로 일괄 선택할 수 있습니다.
+            </div>
+        `;
+    } catch (error) {
+        this.log('🟡 [ERROR] createComparisonContent failed:', error.message);
+        this.log('🟡 [ERROR] Stack trace:', error.stack);
+        return `
+            <div style="padding: 20px; text-align: center; color: #666;">
+                <div style="margin-bottom: 10px;">⚠️ 비교 대화상자 생성 중 오류가 발생했습니다</div>
+                <div style="font-size: 0.9em;">오류: ${this.escapeHtml(error.message)}</div>
+                <div style="margin-top: 15px; font-size: 0.9em;">
+                    기존 Parent Item을 유지하려면 '취소'를 클릭하세요.
+                </div>
+            </div>
+        `;
+    }
+    },
+
+    // Collect user field selections from comparison dialog
+    collectFieldSelections(contentElement) {
+        const selections = {};
+        const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
+        
+        for (const field of fields) {
+            const radios = contentElement.querySelectorAll(`input[name="field_${field}"]`);
+            for (const radio of radios) {
+                if (radio.checked) {
+                    selections[field] = radio.value;
+                    break;
+                }
+            }
+        }
+        
+        return selections;
+    },
+
+    // Select all fields to either 'existing' or 'new'
+    selectAllFields(choice, contentElement) {
+        const fields = ['title', 'authors', 'year', 'journal', 'doi', 'abstract', 'pages', 'volume', 'issue'];
+        
+        for (const field of fields) {
+            const radio = contentElement.querySelector(`input[name="field_${field}"][value="${choice}"]`);
+            if (radio) {
+                radio.checked = true;
+            }
+        }
     },
 
     // Update existing parent with selective fields
     async updateExistingParentSelective(parentID, selection) {
         try {
-            this.log(`Updating existing parent item selectively: ${parentID}`);
+            this.log(`🟢 [DEBUG] Updating existing parent item selectively: ${parentID}`);
+            this.log('🟢 [DEBUG] User selection:', selection);
             
             const parentItem = await Zotero.Items.getAsync(parentID);
             const existingMetadata = await this.getExistingParentMetadata(parentID);
@@ -5333,6 +5609,327 @@ ${text.substring(0, 3000)}
             );
             throw error;
         }
+    },
+
+    // Show metadata preview dialog for user confirmation (Zotero 7 compatible)
+    async showMetadataPreview(metadata, pdfContext) {
+        try {
+            this.log('Showing metadata preview dialog');
+            
+            // Create simple HTML-based dialog content
+            const previewContent = this.createPreviewContent(metadata, pdfContext);
+            
+            // Use Zotero's built-in dialog system
+            const result = await new Promise((resolve) => {
+                const dialogData = {
+                    title: 'AI 추출 메타데이터 미리보기',
+                    content: previewContent,
+                    buttons: [
+                        { label: '취소', action: 'cancel' },
+                        { label: '편집 후 생성', action: 'edit' },
+                        { label: '확인 및 생성', action: 'accept', default: true }
+                    ],
+                    callback: (action, data) => {
+                        resolve({ action, data });
+                    }
+                };
+                
+                this.showCustomDialog(dialogData);
+            });
+            
+            if (result.action === 'accept' || result.action === 'edit') {
+                this.log('User confirmed metadata preview');
+                return { metadata: result.data || metadata };
+            } else {
+                this.log('User cancelled metadata preview');
+                return null;
+            }
+            
+        } catch (error) {
+            this.handleError(error, 'showMetadataPreview');
+            
+            // Fallback to simple confirmation dialog
+            const window = Services.wm.getMostRecentWindow('navigator:browser');
+            const confirmed = window.confirm(
+                `AI가 추출한 메타데이터:\n\n` +
+                `제목: ${metadata.title || '(없음)'}\n` +
+                `저자: ${metadata.authors || '(없음)'}\n` +
+                `저널: ${metadata.journal || '(없음)'}\n` +
+                `연도: ${metadata.year || '(없음)'}\n` +
+                `DOI: ${metadata.doi || '(없음)'}\n\n` +
+                `이 정보로 Parent Item을 생성하시겠습니까?`
+            );
+            
+            return confirmed ? { metadata } : null;
+        }
+    },
+
+    // Create custom dialog for Zotero 7
+    showCustomDialog(dialogData) {
+        // Try to find a window with ready document
+        let window = Services.wm.getMostRecentWindow('navigator:browser');
+        
+        // If main window doesn't have body, try other approaches
+        if (!window || !window.document || !window.document.body) {
+            // Try Zotero main window
+            if (typeof Zotero !== 'undefined' && Zotero.getMainWindow) {
+                window = Zotero.getMainWindow();
+                this.log('🟡 [DEBUG] Trying Zotero.getMainWindow()');
+            }
+            
+            // Try all open windows
+            if (!window || !window.document || !window.document.body) {
+                const windowEnum = Services.wm.getEnumerator('navigator:browser');
+                while (windowEnum.hasMoreElements()) {
+                    const testWindow = windowEnum.getNext();
+                    if (testWindow.document && testWindow.document.body) {
+                        window = testWindow;
+                        this.log('🟡 [DEBUG] Found window with ready document');
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Final check - if still no good window, use fallback
+        if (!window || !window.document || !window.document.body) {
+            this.log('🟡 [ERROR] Document or body not ready, using alternative approach');
+            // Use Zotero's built-in prompt system as fallback
+            this.showFallbackSelectionDialog(dialogData);
+            return;
+        }
+        
+        // Create modal overlay
+        const overlay = window.document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        // Create dialog box
+        const dialog = window.document.createElement('div');
+        const maxWidth = dialogData.wide ? '900px' : '600px';
+        dialog.style.cssText = `
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            max-width: ${maxWidth};
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        `;
+        
+        // Add title
+        const title = window.document.createElement('h2');
+        title.textContent = dialogData.title;
+        title.style.cssText = 'margin-top: 0; margin-bottom: 15px; color: #333;';
+        dialog.appendChild(title);
+        
+        // Add content with enhanced error handling
+        const content = window.document.createElement('div');
+        try {
+            // Validate content before setting innerHTML
+            if (!dialogData.content || typeof dialogData.content !== 'string') {
+                throw new Error('Invalid content type');
+            }
+            
+            // Test if content can be parsed as HTML
+            const testDiv = window.document.createElement('div');
+            testDiv.innerHTML = dialogData.content;
+            
+            // If successful, set the actual content
+            content.innerHTML = dialogData.content;
+            this.log('🟢 [DEBUG] HTML content set successfully');
+            
+        } catch (htmlError) {
+            this.log('🟡 [ERROR] HTML content error:', htmlError.message);
+            // If HTML parsing fails, show simple text
+            content.textContent = `HTML 콘텐츠를 표시할 수 없습니다: ${htmlError.message}\n\n대화상자를 닫고 다시 시도해주세요.`;
+            content.style.cssText = 'padding: 20px; text-align: center; color: #666; white-space: pre-line;';
+        }
+        dialog.appendChild(content);
+        
+        // Add buttons
+        const buttonContainer = window.document.createElement('div');
+        buttonContainer.style.cssText = 'margin-top: 20px; text-align: right;';
+        
+        dialogData.buttons.forEach((button, index) => {
+            const btn = window.document.createElement('button');
+            btn.textContent = button.label;
+            btn.style.cssText = `
+                margin-left: 10px;
+                padding: 8px 16px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background: ${button.default ? '#007cba' : 'white'};
+                color: ${button.default ? 'white' : '#333'};
+                cursor: pointer;
+            `;
+            
+            btn.addEventListener('click', () => {
+                // Call callback first to get result
+                const shouldClose = dialogData.callback(button.action, content);
+                
+                // Close dialog unless callback returns false
+                if (shouldClose !== false) {
+                    window.document.body.removeChild(overlay);
+                }
+            });
+            
+            buttonContainer.appendChild(btn);
+        });
+        
+        dialog.appendChild(buttonContainer);
+        overlay.appendChild(dialog);
+        window.document.body.appendChild(overlay);
+        
+        // Focus on default button
+        const defaultBtn = buttonContainer.querySelector('button:last-child');
+        if (defaultBtn) defaultBtn.focus();
+    },
+
+    // Fallback selection dialog using Zotero services
+    showFallbackSelectionDialog(dialogData) {
+        try {
+            this.log('🟡 [DEBUG] Showing fallback selection dialog');
+            
+            // Use setTimeout to ensure proper execution context
+            setTimeout(() => {
+                try {
+                    // Use Services.prompt for cross-platform compatibility
+                    const prompts = Services.prompt;
+                    const title = "메타데이터 비교";
+                    const text = `기존 Parent Item이 발견되었습니다.\n\n어떻게 처리하시겠습니까?`;
+                    
+                    const button0 = "새 Parent 생성";
+                    const button1 = "모두 새 값으로 업데이트";  
+                    const button2 = "취소 (기존 값 유지)";
+                    
+                    const flags = prompts.BUTTON_TITLE_IS_STRING * prompts.BUTTON_POS_0 +
+                                 prompts.BUTTON_TITLE_IS_STRING * prompts.BUTTON_POS_1 +
+                                 prompts.BUTTON_TITLE_IS_STRING * prompts.BUTTON_POS_2;
+                    
+                    const result = prompts.confirmEx(
+                        null, // parent window
+                        title,
+                        text,
+                        flags,
+                        button0,
+                        button1, 
+                        button2,
+                        null, // checkbox text
+                        {} // checkbox state
+                    );
+                    
+                    this.log('🟡 [DEBUG] Fallback dialog result:', result);
+                    
+                    // Process result
+                    if (dialogData.callback) {
+                        switch (result) {
+                            case 0: // 새 Parent 생성
+                                dialogData.callback('create_new', null);
+                                break;
+                            case 1: // 모두 새 값으로 업데이트
+                                dialogData.callback('all_new', null);
+                                break;
+                            case 2: // 취소
+                            default:
+                                dialogData.callback('cancel', null);
+                                break;
+                        }
+                    }
+                    
+                } catch (promptError) {
+                    this.log('🟡 [ERROR] Fallback prompt failed:', promptError.message);
+                    // Final fallback - just callback with cancel
+                    if (dialogData.callback) {
+                        dialogData.callback('cancel', null);
+                    }
+                }
+            }, 100);
+            
+        } catch (error) {
+            this.log('🟡 [ERROR] showFallbackSelectionDialog failed:', error.message);
+            // Final fallback
+            if (dialogData.callback) {
+                dialogData.callback('cancel', null);
+            }
+        }
+    },
+
+    // Create preview content HTML
+    createPreviewContent(metadata, pdfContext) {
+        try {
+            const fields = [
+                { key: 'title', label: '제목' },
+                { key: 'authors', label: '저자' },
+                { key: 'year', label: '연도' },
+                { key: 'journal', label: '저널' },
+                { key: 'doi', label: 'DOI' },
+                { key: 'abstract', label: '초록' },
+                { key: 'pages', label: '페이지' },
+                { key: 'volume', label: '권' },
+                { key: 'issue', label: '호' }
+            ];
+        
+        const fieldsHTML = fields.map(field => {
+            const value = metadata[field] || '';
+            const displayValue = value || '(비어있음)';
+            const isEmpty = !value;
+            
+            return `
+                <div style="margin-bottom: 12px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div style="font-weight: bold; margin-bottom: 4px; color: #333;">
+                        ${field.label}
+                    </div>
+                    <div style="background: #f9f9f9; padding: 6px; border-radius: 3px; ${isEmpty ? 'color: #999; font-style: italic;' : ''} ${field.key === 'abstract' ? 'max-height: 120px;' : 'max-height: 60px;'} overflow-y: auto; line-height: 1.4;">
+                        ${this.escapeHtml(displayValue)}
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        return `
+            <div style="margin-bottom: 15px; padding: 10px; background: #e8f4f8; border-radius: 5px;">
+                <div style="font-weight: bold;">PDF 파일: ${pdfContext.filename || 'Unknown'}</div>
+                <div style="font-size: 0.9em; color: #666;">추출 방법: AI 메타데이터 추출</div>
+            </div>
+            <div style="max-height: 400px; overflow-y: auto;">
+                ${fieldsHTML}
+            </div>
+            <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 0.9em; color: #666; text-align: center;">
+                확인: 그대로 생성 | 편집: 수정 후 생성 | 취소: 작업 중단
+            </div>
+        `;
+        } catch (error) {
+            this.log('🟡 [ERROR] createPreviewContent failed:', error.message);
+            return `
+                <div style="padding: 20px; text-align: center; color: #666;">
+                    <div style="margin-bottom: 10px;">⚠️ 미리보기 생성 중 오류가 발생했습니다</div>
+                    <div style="font-size: 0.9em;">오류: ${this.escapeHtml(error.message)}</div>
+                    <div style="margin-top: 15px;">
+                        <div style="font-weight: bold;">추출된 기본 정보:</div>
+                        <div>제목: ${this.escapeHtml(metadata.title || '추출 실패')}</div>
+                        <div>저자: ${this.escapeHtml(metadata.authors ? String(metadata.authors) : '추출 실패')}</div>
+                    </div>
+                </div>
+            `;
+        }
+    },
+
+    // Collect edited metadata (placeholder for future edit functionality)
+    collectEditedMetadata(contentElement) {
+        // For now, return original metadata
+        // In the future, this could collect edited values from input fields
+        return null;
     }
 };
 
