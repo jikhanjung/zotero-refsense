@@ -119,7 +119,7 @@ async function copySourceFiles() {
         fs.copyFileSync(bootstrapPath, bootstrapDest);
         console.log('Copied bootstrap.js');
     }
-    
+
     // Copy prefs.js to root (Zotero 7 default preferences)
     const prefsPath = './prefs.js';
     const prefsDest = path.join(BUILD_CONFIG.buildDir, 'prefs.js');
@@ -129,7 +129,25 @@ async function copySourceFiles() {
         console.log('Copied prefs.js');
     }
     
-    // Copy prefs.xhtml to root
+    // Copy prefs.html to root
+    const prefsHtmlPath = './prefs.html';
+    const prefsHtmlDest = path.join(BUILD_CONFIG.buildDir, 'prefs.html');
+    
+    if (fs.existsSync(prefsHtmlPath)) {
+        fs.copyFileSync(prefsHtmlPath, prefsHtmlDest);
+        console.log('Copied prefs.html');
+    }
+    
+    // Copy prefs-script.js to root
+    const prefsScriptPath = './prefs-script.js';
+    const prefsScriptDest = path.join(BUILD_CONFIG.buildDir, 'prefs-script.js');
+    
+    if (fs.existsSync(prefsScriptPath)) {
+        fs.copyFileSync(prefsScriptPath, prefsScriptDest);
+        console.log('Copied prefs-script.js');
+    }
+    
+    // Copy prefs.xhtml to root (legacy support)
     const prefsXhtmlPath = './prefs.xhtml';
     const prefsXhtmlDest = path.join(BUILD_CONFIG.buildDir, 'prefs.xhtml');
     

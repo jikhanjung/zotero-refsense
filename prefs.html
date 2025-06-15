@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>RefSense Settings</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 20px;
+            background: #f9f9f9;
+        }
+        
+        .section {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            padding: 15px;
+        }
+        
+        .section-title {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .form-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .form-row label {
+            min-width: 100px;
+            margin-right: 10px;
+            font-size: 13px;
+        }
+        
+        .form-row input, .form-row select {
+            flex: 1;
+            max-width: 300px;
+            padding: 6px 8px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        
+        .form-row button {
+            margin-left: 10px;
+            padding: 6px 12px;
+            background: #007acc;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .form-row button:hover {
+            background: #005a9e;
+        }
+        
+        .description {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+        
+        input[disabled] {
+            background: #f5f5f5;
+            color: #999;
+        }
+        
+        .usage-steps {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .usage-steps li {
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+        
+        .button-row {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+        }
+        
+        .button-row button {
+            padding: 8px 16px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        
+        .button-primary {
+            background: #007acc;
+            color: white;
+            border-color: #007acc;
+        }
+        
+        .button-primary:hover {
+            background: #005a9e;
+        }
+        
+        .button-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .button-secondary:hover {
+            background: #e5e5e5;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        button:disabled:hover {
+            background: inherit !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="section">
+        <div class="section-title">RefSense AI 메타데이터 추출기</div>
+        
+        <div class="form-row">
+            <label>AI 백엔드:</label>
+            <select id="ai-backend">
+                <option value="openai">OpenAI (GPT)</option>
+                <option value="ollama">Ollama (로컬)</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="section" id="openai-section">
+        <div class="section-title">OpenAI 설정</div>
+        
+        <div class="form-row">
+            <label>API 키:</label>
+            <input type="password" id="openai-api-key" placeholder="sk-...">
+            <button id="test-openai">테스트</button>
+        </div>
+        
+        <div class="form-row">
+            <label>모델:</label>
+            <select id="openai-model">
+                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                <option value="gpt-4">GPT-4</option>
+                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+            </select>
+        </div>
+        
+        <div class="description">
+            OpenAI 계정(https://platform.openai.com)에서 발급받은 API 키를 입력하세요.
+        </div>
+    </div>
+
+    <div class="section hidden" id="ollama-section">
+        <div class="section-title">Ollama 설정</div>
+        
+        <div class="form-row">
+            <label>호스트:</label>
+            <input type="text" id="ollama-host" placeholder="http://localhost:11434">
+            <button id="test-ollama">테스트</button>
+        </div>
+        
+        <div class="form-row">
+            <label>모델:</label>
+            <input type="text" id="ollama-model" placeholder="llama3.2:latest">
+        </div>
+        
+        <div class="description">
+            로컬에서 실행 중인 Ollama 서버 정보를 입력하세요. (https://ollama.ai)
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">PDF 페이지 추출 설정</div>
+        
+        <div class="form-row">
+            <label>추출 페이지:</label>
+            <select id="page-source">
+                <option value="first">첫 페이지</option>
+                <option value="current">현재 페이지</option>
+                <option value="range">페이지 범위</option>
+            </select>
+        </div>
+        
+        <div class="form-row">
+            <label>페이지 범위:</label>
+            <input type="text" id="page-range" placeholder="1-2" disabled>
+        </div>
+        
+        <div class="description">
+            기본적으로 첫 페이지에서 서지정보를 추출합니다.
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">사용법</div>
+        <ol class="usage-steps">
+            <li>1. PDF 파일을 Zotero에서 열기</li>
+            <li>2. 키보드 단축키 Ctrl+Shift+E 또는 우상단 RefSense 버튼 클릭</li>
+            <li>3. AI가 메타데이터를 추출하여 parent 아이템 자동 생성</li>
+        </ol>
+    </div>
+
+    <div class="button-row">
+        <button id="reset-button" class="button-secondary">기본값 복원</button>
+        <button id="cancel-button" class="button-secondary">취소</button>
+        <button id="save-button" class="button-primary">저장</button>
+    </div>
+
+    <script src="prefs-script.js"></script>
+    <script src="bootstrap.js"></script>
+</body>
+</html>
