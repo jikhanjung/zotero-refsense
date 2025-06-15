@@ -44,11 +44,8 @@ RefSense.Plugin = {
             // Load configuration
             this.loadConfig();
             
-            // Register preferences pane (Zotero 7 way)
-            this.registerPreferencesPane();
-            
-            // Setup preferences message handling
-            this.setupPreferencesMessaging();
+            // Register custom preferences menu (Zotero 7 way)
+            this.registerCustomPreferences();
             
             // 전역 접근을 위한 추가 등록
             this.setupGlobalAccess();
@@ -71,15 +68,13 @@ RefSense.Plugin = {
         this.log('RefSense plugin loaded successfully');
     },
     
-    // Register preferences using options_ui (Zotero 7 compatible)
-    registerPreferencesPane() {
+    // Register custom preferences menu (직접 접근 방식)
+    registerCustomPreferences() {
         try {
-            this.log('Setting up preferences using options_ui method');
+            this.log('Setting up custom preferences menu');
             
-            // Zotero 7에서는 manifest.json의 options_ui가 자동으로 처리됨
-            // 하지만 명시적으로 등록하여 확실히 하기
+            // 설정 변경 감지를 위한 옵저버 등록
             if (Zotero.Prefs && typeof Zotero.Prefs.registerObserver === 'function') {
-                // 설정 변경 감지를 위한 옵저버 등록
                 const prefBranch = 'extensions.refsense.';
                 Zotero.Prefs.registerObserver(prefBranch, () => {
                     this.log('RefSense 설정이 변경되었습니다');
@@ -88,38 +83,439 @@ RefSense.Plugin = {
                 this.log('✅ Preferences observer registered');
             }
             
-            // 플러그인 매니저에서 Options 버튼이 표시되도록 하기 위한 추가 등록
-            try {
-                const addons = Zotero.AddonManager;
-                if (addons) {
-                    this.log('AddonManager found, ensuring options are available');
-                }
-            } catch (addonError) {
-                this.log('AddonManager access failed:', addonError.message);
-            }
+            // Tools 메뉴에 설정 메뉴 추가
+            this.addToolsMenuItem();
             
-            this.log('✅ Preferences setup completed using options_ui');
+            this.log('✅ Custom preferences setup completed');
             return true;
             
         } catch (error) {
-            this.log('❌ Failed to setup preferences:', error.message);
+            this.log('❌ Failed to setup custom preferences:', error.message);
             this.log('Error stack:', error.stack);
             return false;
         }
     },
     
-    // Setup preferences messaging for options_ui
-    setupPreferencesMessaging() {
+    // Tools 메뉴에 RefSense 설정 메뉴 추가
+    addToolsMenuItem() {
         try {
-            this.log('Setting up preferences messaging');
+            this.log('🔍 Attempting to add Tools menu item...');
             
-            // 간단하고 직접적인 메시지 리스너 등록
-            this.setupDirectMessageListener();
+            const window = Zotero.getMainWindow();
+            if (!window || !window.document) {
+                this.log('❌ Main window not available for menu setup');
+                return;
+            }
+            this.log('✅ Main window found');
+            
+            const menubar = window.document.getElementById('main-menubar');
+            if (!menubar) {
+                this.log('❌ Main menubar not found');
+                return;
+            }
+            this.log('✅ Main menubar found');
+            
+            const toolsMenu = window.document.getElementById('menu_ToolsPopup');
+            if (!toolsMenu) {
+                this.log('❌ Tools menu not found, trying alternative selectors...');
+                
+                // 대체 셀렉터들 시도
+                const alternatives = [
+                    'toolsPopup',
+                    'menu_Tools', 
+                    'tools-menu',
+                    'toolsmenu'
+                ];
+                
+                for (const alt of alternatives) {
+                    const altMenu = window.document.getElementById(alt);
+                    if (altMenu) {
+                        this.log(`✅ Found alternative tools menu: ${alt}`);
+                        return this.addMenuToElement(altMenu);
+                    }
+                }
+                
+                this.log('❌ No tools menu found with any selector');
+                return;
+            }
+            this.log('✅ Tools menu found');
+            
+            return this.addMenuToElement(toolsMenu);
             
         } catch (error) {
-            this.log('❌ Failed to setup preferences messaging:', error.message);
+            this.log('❌ Failed to add Tools menu item:', error.message);
+            this.log('Error stack:', error.stack);
         }
     },
+    
+    // 메뉴 요소에 메뉴 아이템 추가
+    addMenuToElement(menuElement) {
+        try {
+            // 기존 메뉴 아이템이 있는지 확인
+            const existingItem = menuElement.querySelector('#refsense-settings-menuitem');
+            if (existingItem) {
+                this.log('⚠️ RefSense menu item already exists, removing old one');
+                existingItem.remove();
+            }
+            
+            // RefSense 설정 메뉴 아이템 생성
+            const menuItem = menuElement.ownerDocument.createXULElement('menuitem');
+            menuItem.id = 'refsense-settings-menuitem';
+            menuItem.setAttribute('label', 'RefSense 설정...');
+            menuItem.addEventListener('command', () => {
+                this.openSettingsDialog();
+            });
+            
+            // 구분자 추가 (옵션)
+            const separator = menuElement.ownerDocument.createXULElement('menuseparator');
+            separator.id = 'refsense-separator';
+            
+            // Tools 메뉴에 추가
+            menuElement.appendChild(separator);
+            menuElement.appendChild(menuItem);
+            
+            this.log('✅ RefSense menu item successfully added to Tools menu');
+            return true;
+            
+        } catch (error) {
+            this.log('❌ Failed to add menu to element:', error.message);
+            return false;
+        }
+    },
+    
+    // 설정 다이얼로그 열기
+    openSettingsDialog() {
+        try {
+            this.log('Opening RefSense settings dialog');
+            
+            const window = Zotero.getMainWindow();
+            if (!window) {
+                this.log('Main window not available');
+                return;
+            }
+            
+            // HTML 기반 설정창 다이얼로그 열기
+            this.openCustomSettingsDialog();
+            
+        } catch (error) {
+            this.log('❌ Failed to open settings dialog:', error.message);
+        }
+    },
+    
+    // 간단한 통합 설정 다이얼로그
+    openCustomSettingsDialog() {
+        try {
+            const window = Zotero.getMainWindow();
+            
+            // 현재 설정 로드
+            this.loadConfig();
+            
+            // 모든 설정을 하나의 폼으로 받기
+            this.showUnifiedSettingsPrompt();
+            
+        } catch (error) {
+            this.log('❌ Failed to open settings dialog:', error.message);
+            const window = Zotero.getMainWindow();
+            if (window) {
+                window.alert('설정을 열 수 없습니다: ' + error.message);
+            }
+        }
+    },
+    
+    // 통합 설정 프롬프트
+    showUnifiedSettingsPrompt() {
+        const window = Zotero.getMainWindow();
+        if (!window) return;
+        
+        // 현재 설정값 표시
+        const currentApiKey = this.config.openaiApiKey ? 
+            (this.config.openaiApiKey.length > 10 ? '****' + this.config.openaiApiKey.slice(-4) : '[설정됨]') : '[없음]';
+        
+        const currentSettings = `현재 RefSense 설정:
+
+• AI 백엔드: ${this.config.aiBackend}
+• OpenAI API 키: ${currentApiKey}
+• OpenAI 모델: ${this.config.openaiModel}
+• Ollama 호스트: ${this.config.ollama_host}
+• Ollama 모델: ${this.config.ollama_model}
+• 페이지 소스: ${this.config.defaultPageSource}
+• 페이지 범위: ${this.config.pageRange}
+
+설정을 변경하시겠습니까?`;
+
+        if (!window.confirm(currentSettings)) return;
+        
+        // 1. AI 백엔드 선택
+        const backends = ['openai', 'ollama'];
+        let backendChoice = window.prompt(
+            `AI 백엔드를 선택하세요:\n1. OpenAI (GPT)\n2. Ollama (로컬)\n\n현재: ${this.config.aiBackend}\n숫자를 입력하세요 (1-2):`,
+            this.config.aiBackend === 'openai' ? '1' : '2'
+        );
+        
+        if (backendChoice === null) return; // 취소
+        backendChoice = backendChoice.trim();
+        if (!['1', '2'].includes(backendChoice)) {
+            window.alert('잘못된 선택입니다.');
+            return;
+        }
+        
+        const selectedBackend = backends[parseInt(backendChoice) - 1];
+        
+        // 2. 백엔드별 설정
+        let newSettings = { aiBackend: selectedBackend };
+        
+        if (selectedBackend === 'openai') {
+            // OpenAI 설정
+            const apiKey = window.prompt(
+                `OpenAI API 키를 입력하세요 (sk-로 시작):\n현재: ${currentApiKey}\n\n(빈 값으로 두면 기존 키 유지)`,
+                ''
+            );
+            
+            if (apiKey === null) return; // 취소
+            
+            if (apiKey.trim()) {
+                if (!apiKey.startsWith('sk-')) {
+                    window.alert('API 키는 sk-로 시작해야 합니다.');
+                    return;
+                }
+                newSettings.openaiApiKey = btoa(apiKey.trim());
+            } else {
+                newSettings.openaiApiKey = this.config.openaiApiKey; // 기존 값 유지
+            }
+            
+            const models = ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'];
+            const modelChoice = window.prompt(
+                `OpenAI 모델을 선택하세요:\n1. GPT-4 Turbo (권장)\n2. GPT-4\n3. GPT-3.5 Turbo\n\n현재: ${this.config.openaiModel}\n숫자를 입력하세요 (1-3):`,
+                models.indexOf(this.config.openaiModel) + 1 || '1'
+            );
+            
+            if (modelChoice === null) return;
+            const modelIndex = parseInt(modelChoice.trim()) - 1;
+            if (modelIndex < 0 || modelIndex >= models.length) {
+                window.alert('잘못된 모델 선택입니다.');
+                return;
+            }
+            newSettings.openaiModel = models[modelIndex];
+            
+        } else {
+            // Ollama 설정
+            const ollamaHost = window.prompt(
+                `Ollama 호스트 URL을 입력하세요:\n현재: ${this.config.ollama_host}`,
+                this.config.ollama_host
+            );
+            
+            if (ollamaHost === null) return;
+            newSettings.ollamaHost = ollamaHost.trim() || 'http://localhost:11434';
+            
+            const ollamaModel = window.prompt(
+                `Ollama 모델명을 입력하세요:\n현재: ${this.config.ollama_model}`,
+                this.config.ollama_model
+            );
+            
+            if (ollamaModel === null) return;
+            newSettings.ollamaModel = ollamaModel.trim() || 'llama3.2:latest';
+        }
+        
+        // 3. 페이지 추출 설정
+        const pageSources = ['first', 'current', 'range'];
+        const pageChoice = window.prompt(
+            `PDF 페이지 추출 방식을 선택하세요:\n1. 첫 페이지 (권장)\n2. 현재 페이지\n3. 페이지 범위\n\n현재: ${this.config.defaultPageSource}\n숫자를 입력하세요 (1-3):`,
+            pageSources.indexOf(this.config.defaultPageSource) + 1 || '1'
+        );
+        
+        if (pageChoice === null) return;
+        const pageIndex = parseInt(pageChoice.trim()) - 1;
+        if (pageIndex < 0 || pageIndex >= pageSources.length) {
+            window.alert('잘못된 페이지 옵션 선택입니다.');
+            return;
+        }
+        newSettings.defaultPageSource = pageSources[pageIndex];
+        
+        if (newSettings.defaultPageSource === 'range') {
+            const pageRange = window.prompt(
+                `페이지 범위를 입력하세요 (예: 1-2):\n현재: ${this.config.pageRange}`,
+                this.config.pageRange
+            );
+            
+            if (pageRange === null) return;
+            newSettings.pageRange = pageRange.trim() || '1-2';
+        } else {
+            newSettings.pageRange = this.config.pageRange; // 기존 값 유지
+        }
+        
+        // 4. 설정 저장
+        this.saveSettingsFromDialog(newSettings);
+        window.alert('✅ 설정이 저장되었습니다!');
+    },
+    
+    // 다이얼로그에서 설정 저장
+    saveSettingsFromDialog(settings) {
+        try {
+            this.log('💾 다이얼로그에서 설정 저장 중...');
+            
+            // 모든 설정 저장
+            Object.keys(settings).forEach(key => {
+                let prefKey;
+                let value = settings[key];
+                
+                // 키 매핑
+                if (key === 'ollamaHost') {
+                    prefKey = 'extensions.refsense.ollamaHost';
+                } else if (key === 'ollamaModel') {
+                    prefKey = 'extensions.refsense.ollamaModel';
+                } else if (key === 'defaultPageSource') {
+                    prefKey = 'extensions.refsense.defaultPageSource';
+                } else {
+                    prefKey = `extensions.refsense.${key}`;
+                }
+                
+                Zotero.Prefs.set(prefKey, value);
+                this.log(`✅ 저장: ${prefKey} = ${value}`);
+            });
+            
+            // 설정 다시 로드
+            this.loadConfig();
+            
+            this.log('✅ 다이얼로그 설정 저장 완료');
+            
+            // 성공 알림
+            const window = Zotero.getMainWindow();
+            if (window) {
+                window.alert('RefSense 설정이 저장되었습니다.');
+            }
+            
+        } catch (error) {
+            this.log('❌ 다이얼로그 설정 저장 실패:', error.message);
+        }
+    },
+    
+    // 간단한 설정 다이얼로그 (Zotero 7 호환)
+    showSimpleSettingsDialog() {
+        try {
+            const window = Zotero.getMainWindow();
+            
+            // 현재 설정값 가져오기 (this.config 사용)
+            this.log('🔍 설정값 로드 시작...');
+            
+            // 먼저 최신 설정을 로드
+            this.loadConfig();
+            
+            const currentSettings = {
+                aiBackend: this.config.aiBackend,
+                openaiApiKey: this.config.openaiApiKey,
+                openaiModel: this.config.openaiModel,
+                ollamaHost: this.config.ollama_host,
+                ollamaModel: this.config.ollama_model,
+                pageSource: this.config.defaultPageSource
+            };
+            
+            // 각 설정값 개별 로그
+            this.log('📋 로드된 설정값들:');
+            this.log(`  - aiBackend: "${currentSettings.aiBackend}"`);
+            this.log(`  - openaiApiKey: "${currentSettings.openaiApiKey ? '[설정됨]' : '[없음]'}"`);
+            this.log(`  - openaiModel: "${currentSettings.openaiModel}"`);
+            this.log(`  - ollamaHost: "${currentSettings.ollamaHost}"`);
+            this.log(`  - ollamaModel: "${currentSettings.ollamaModel}"`);
+            this.log(`  - pageSource: "${currentSettings.pageSource}"`);
+            
+            // API 키 디코딩 (있는 경우)
+            let apiKeyDisplay = '[없음]';
+            if (currentSettings.openaiApiKey) {
+                try {
+                    const decodedKey = atob(currentSettings.openaiApiKey);
+                    apiKeyDisplay = `${decodedKey.substring(0, 8)}...`;
+                } catch (e) {
+                    apiKeyDisplay = '[인코딩 오류]';
+                }
+            }
+            
+            // 현재 설정 표시 메시지
+            let settingsText = `현재 RefSense 설정:
+
+• AI 백엔드: ${currentSettings.aiBackend}
+• OpenAI API 키: ${apiKeyDisplay}
+• OpenAI 모델: ${currentSettings.openaiModel}
+• Ollama 호스트: ${currentSettings.ollamaHost}
+• Ollama 모델: ${currentSettings.ollamaModel}
+• 페이지 소스: ${currentSettings.pageSource}
+
+설정을 변경하시겠습니까?`;
+            
+            // Zotero 7 호환 confirm 다이얼로그
+            const result = window.confirm(settingsText);
+            
+            if (result) {
+                // 상세 설정창 열기
+                this.showDetailedSettingsDialog(currentSettings);
+            }
+            
+        } catch (error) {
+            this.log('❌ Failed to show simple settings dialog:', error.message);
+        }
+    },
+    
+    // 상세 설정 다이얼로그 (Zotero 7 호환)
+    showDetailedSettingsDialog(currentSettings) {
+        try {
+            const window = Zotero.getMainWindow();
+            
+            // AI 백엔드 선택
+            const backendChoice = window.confirm('AI 백엔드를 선택하세요:\n\n확인 = OpenAI\n취소 = Ollama');
+            const selectedBackend = backendChoice ? 'openai' : 'ollama';
+            
+            this.log(`🔧 선택된 백엔드: ${selectedBackend}`);
+            
+            if (selectedBackend === 'openai') {
+                // OpenAI 설정
+                const apiKey = window.prompt('OpenAI API 키를 입력하세요:', '');
+                
+                if (apiKey && apiKey.trim()) {
+                    // API 키 인코딩하여 저장
+                    const encodedKey = btoa(apiKey.trim());
+                    
+                    this.log('💾 OpenAI 설정 저장 중...');
+                    Zotero.Prefs.set('extensions.refsense.aiBackend', 'openai');
+                    Zotero.Prefs.set('extensions.refsense.openaiApiKey', encodedKey);
+                    
+                    // 저장 확인
+                    const savedBackend = Zotero.Prefs.get('extensions.refsense.aiBackend');
+                    const savedKey = Zotero.Prefs.get('extensions.refsense.openaiApiKey');
+                    this.log(`✅ 저장 확인 - aiBackend: "${savedBackend}", apiKey 길이: ${savedKey.length}`);
+                    
+                    this.log('OpenAI 설정이 저장되었습니다');
+                    window.alert('OpenAI 설정이 저장되었습니다.');
+                }
+            } else {
+                // Ollama 설정
+                const host = window.prompt('Ollama 호스트 URL을 입력하세요:', currentSettings.ollamaHost);
+                
+                if (host && host.trim()) {
+                    this.log('💾 Ollama 설정 저장 중...');
+                    Zotero.Prefs.set('extensions.refsense.aiBackend', 'ollama');
+                    Zotero.Prefs.set('extensions.refsense.ollamaHost', host.trim());
+                    
+                    // 저장 확인
+                    const savedBackend = Zotero.Prefs.get('extensions.refsense.aiBackend');
+                    const savedHost = Zotero.Prefs.get('extensions.refsense.ollamaHost');
+                    this.log(`✅ 저장 확인 - aiBackend: "${savedBackend}", ollamaHost: "${savedHost}"`);
+                    
+                    this.log('Ollama 설정이 저장되었습니다');
+                    window.alert('Ollama 설정이 저장되었습니다.');
+                }
+            }
+            
+            // 설정 다시 로드 (3초 지연으로 저장 완료 보장)
+            setTimeout(() => {
+                this.log('🔄 지연된 설정 재로드 시작...');
+                this.loadConfig();
+                this.log('🔄 지연된 설정 재로드 완료');
+            }, 3000);
+            
+        } catch (error) {
+            this.log('❌ Failed to show detailed settings dialog:', error.message);
+        }
+    },
+    
     
     // 직접적인 메시지 리스너 설정 (Zotero Main Window에 등록)
     setupDirectMessageListener() {
@@ -771,17 +1167,25 @@ RefSense.Plugin = {
     // Load configuration from Zotero preferences (updated for integrated settings)
     loadConfig() {
         try {
+            this.log('📥 loadConfig() 호출됨');
+            
+            // 실제 저장된 값들을 먼저 확인
+            const rawBackend = Zotero.Prefs.get('extensions.refsense.aiBackend');
+            const rawOllamaHost = Zotero.Prefs.get('extensions.refsense.ollamaHost');
+            
+            this.log(`📥 Raw values: aiBackend="${rawBackend}", ollamaHost="${rawOllamaHost}"`);
+            
             this.config = {
                 // AI 백엔드 설정
-                aiBackend: Zotero.Prefs.get('extensions.refsense.aiBackend') || 'openai',
+                aiBackend: rawBackend || 'openai',
                 
                 // OpenAI 설정
                 openaiModel: Zotero.Prefs.get('extensions.refsense.openaiModel') || 'gpt-4-turbo',
                 openaiApiKey: Zotero.Prefs.get('extensions.refsense.openaiApiKey') || '',
                 
                 // Ollama 설정
-                ollama_model: Zotero.Prefs.get('extensions.refsense.ollama_model') || 'llama3.2:latest',
-                ollama_host: Zotero.Prefs.get('extensions.refsense.ollama_host') || 'http://localhost:11434',
+                ollama_model: Zotero.Prefs.get('extensions.refsense.ollamaModel') || 'llama3.2:latest',
+                ollama_host: Zotero.Prefs.get('extensions.refsense.ollamaHost') || 'http://localhost:11434',
                 
                 // PDF 추출 설정
                 defaultPageSource: Zotero.Prefs.get('extensions.refsense.defaultPageSource') || 'first',
@@ -4308,7 +4712,7 @@ ${text.substring(0, 3000)}
             }
             
             // 실제 설정창 열기
-            const preferencesURL = this.rootURI + 'preferences/preferences.html';
+            const preferencesURL = this.rootURI + 'prefs.html';
             this.log('Opening preferences with openDialog at:', preferencesURL);
             
             const dialog = mainWindow.openDialog(
@@ -5969,6 +6373,12 @@ function shutdown() {
 function install() {
     if (typeof Zotero !== 'undefined' && Zotero.debug) {
         Zotero.debug('[RefSense] Plugin installed');
+    }
+}
+
+function startup() {
+    if (typeof Zotero !== 'undefined' && RefSense && RefSense.Plugin) {
+        RefSense.Plugin.startup();
     }
 }
 
