@@ -9,6 +9,12 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 - **Keyboard Shortcut**: Ctrl+Shift+E for quick access
 - **Auto-Detection**: Automatically detects PDF reader windows
 
+### 📋 **Item List Context Menu**
+- **Smart Menu**: Right-click context menu for PDFs without parent items
+- **Contextual Display**: "📄 RefSense: 서지정보 추출" menu appears only for applicable PDFs
+- **Multi-Selection**: Supports selecting from multiple PDFs when multiple items are chosen
+- **Unified Workflow**: Same extraction process as PDF reader integration
+
 ### 🤖 **AI-Powered Extraction**
 - **OpenAI GPT-4 Turbo**: High-precision metadata extraction
 - **Local Ollama Models**: Privacy-focused local processing
@@ -67,6 +73,7 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 
 ### Basic Usage
 
+**Method 1: PDF Reader**
 1. **Open a PDF** in Zotero's PDF reader (must be a PDF without existing parent item)
 2. **Look for the RefSense button** (📄) in the top-right corner, or press **Ctrl+Shift+E**
 3. **Click the button** - AI processing will start automatically
@@ -74,7 +81,14 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 5. **Review metadata** - a preview dialog shows the extracted bibliographic information
 6. **Confirm creation** - a new parent item will be created and linked to your PDF
 
-**Note**: The RefSense button only appears for PDFs that don't already have parent items, keeping your interface clean and focused.
+**Method 2: Item List Context Menu**
+1. **Right-click a PDF** in Zotero's item list (must be a PDF without existing parent item)
+2. **Select "📄 RefSense: 서지정보 추출"** from the context menu
+3. **Choose PDF** if multiple PDFs are selected (selection dialog appears)
+4. **Wait for extraction** - same AI processing as PDF reader method
+5. **Review and confirm** - create parent item without opening the PDF
+
+**Note**: RefSense options only appear for PDFs that don't already have parent items, keeping your interface clean and focused.
 
 ## 🔧 Advanced Features
 
@@ -179,13 +193,16 @@ zotero-refsense/
 
 ## 🔍 How It Works
 
-1. **Smart Button Logic**: Only displays RefSense button for PDFs without existing parent items
-2. **PDF Text Extraction**: Uses 6 different methods including Zotero's Fulltext API, cache files, and database queries
-3. **Quality Validation**: Filters binary content and scores academic relevance to ensure good text quality
-4. **AI Processing**: Sends optimized prompts to chosen AI backend (OpenAI GPT-4 or local Ollama)
-5. **Metadata Parsing**: Converts AI JSON response to Zotero fields with validation and error handling
-6. **Parent Creation**: Creates new parent items and establishes proper PDF relationships
-7. **Database Integration**: Uses Zotero's transaction system for data integrity with rollback support
+1. **Smart UI Logic**: Only displays RefSense options (button/menu) for PDFs without existing parent items
+2. **Dual Access Methods**: 
+   - PDF Reader floating button with keyboard shortcut
+   - Item list context menu for direct PDF processing without opening
+3. **PDF Text Extraction**: Uses 6 different methods including Zotero's Fulltext API, cache files, and database queries
+4. **Quality Validation**: Filters binary content and scores academic relevance to ensure good text quality
+5. **AI Processing**: Sends optimized prompts to chosen AI backend (OpenAI GPT-4 or local Ollama)
+6. **Metadata Parsing**: Converts AI JSON response to Zotero fields with validation and error handling
+7. **Parent Creation**: Creates new parent items and establishes proper PDF relationships
+8. **Database Integration**: Uses Zotero's transaction system for data integrity with rollback support
 
 ## 🤝 Contributing
 

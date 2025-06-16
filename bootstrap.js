@@ -1255,6 +1255,9 @@ RefSense.Plugin = {
     initUI() {
         // Add menu items to PDF reader
         this.addPDFReaderButtons();
+        
+        // Add context menu to item list
+        this.addItemListContextMenu();
     },
     
     // Add buttons to PDF reader toolbar
@@ -1739,25 +1742,29 @@ RefSense.Plugin = {
             
             this.log('PDF item found:', item.getField('title') || 'Untitled');
             
-            // Show processing message on buttons
+            // Show processing message on buttons (skip for context menu calls)
             let targetDoc = null;
-            if (reader._iframeWindow && reader._iframeWindow.document) {
-                targetDoc = reader._iframeWindow.document;
-            } else if (reader._window && reader._window.document) {
-                targetDoc = reader._window.document;
-            }
-            
             let simpleBtn = null;
             let originalSimpleText = '';
             
-            if (targetDoc) {
-                simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
-                if (simpleBtn) {
-                    originalSimpleText = simpleBtn.textContent;
-                    simpleBtn.textContent = '⏳ Processing...';
-                    simpleBtn.style.opacity = '0.7';
-                    simpleBtn.style.pointerEvents = 'none';
+            if (!reader._isContextMenu) {
+                if (reader._iframeWindow && reader._iframeWindow.document) {
+                    targetDoc = reader._iframeWindow.document;
+                } else if (reader._window && reader._window.document) {
+                    targetDoc = reader._window.document;
                 }
+                
+                if (targetDoc) {
+                    simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
+                    if (simpleBtn) {
+                        originalSimpleText = simpleBtn.textContent;
+                        simpleBtn.textContent = '⏳ Processing...';
+                        simpleBtn.style.opacity = '0.7';
+                        simpleBtn.style.pointerEvents = 'none';
+                    }
+                }
+            } else {
+                this.log('Context menu call detected - skipping button UI updates');
             }
             
             try {
@@ -1781,38 +1788,45 @@ RefSense.Plugin = {
                 }
                 
             } finally {
-                // Restore buttons
-                setTimeout(() => {
-                    if (simpleBtn) {
-                        simpleBtn.textContent = originalSimpleText;
-                        simpleBtn.style.opacity = '1';
-                        simpleBtn.style.pointerEvents = 'auto';
-                    }
-                }, 1000);
+                // Restore buttons (skip for context menu calls)
+                if (!reader._isContextMenu) {
+                    setTimeout(() => {
+                        if (simpleBtn) {
+                            simpleBtn.textContent = originalSimpleText;
+                            simpleBtn.style.opacity = '1';
+                            simpleBtn.style.pointerEvents = 'auto';
+                        }
+                    }, 1000);
+                }
             }
             
         } catch (error) {
             this.handleError(error, 'handleExtractMetadata');
             
             // Show error to user
-            if (reader._window) {
+            if (reader._isContextMenu) {
+                // For context menu calls, show error differently
+                this.showError('RefSense 오류', `처리 중 오류가 발생했습니다: ${error.message}`);
+            } else if (reader._window) {
                 reader._window.alert(`RefSense Error: ${error.message}`);
             }
             
-            // Restore buttons on error
-            let targetDoc = null;
-            if (reader._iframeWindow && reader._iframeWindow.document) {
-                targetDoc = reader._iframeWindow.document;
-            } else if (reader._window && reader._window.document) {
-                targetDoc = reader._window.document;
-            }
-            
-            if (targetDoc) {
-                const simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
-                if (simpleBtn) {
-                    simpleBtn.textContent = '📄 RefSense';
-                    simpleBtn.style.opacity = '1';
-                    simpleBtn.style.pointerEvents = 'auto';
+            // Restore buttons on error (skip for context menu calls)
+            if (!reader._isContextMenu) {
+                let targetDoc = null;
+                if (reader._iframeWindow && reader._iframeWindow.document) {
+                    targetDoc = reader._iframeWindow.document;
+                } else if (reader._window && reader._window.document) {
+                    targetDoc = reader._window.document;
+                }
+                
+                if (targetDoc) {
+                    const simpleBtn = targetDoc.querySelector('#refsense-simple-btn');
+                    if (simpleBtn) {
+                        simpleBtn.textContent = '📄 RefSense';
+                        simpleBtn.style.opacity = '1';
+                        simpleBtn.style.pointerEvents = 'auto';
+                    }
                 }
             }
         }
@@ -6334,6 +6348,242 @@ ${text.substring(0, 3000)}
         // For now, return original metadata
         // In the future, this could collect edited values from input fields
         return null;
+    },
+
+    // Add context menu to item list
+    addItemListContextMenu() {
+        this.log('Adding context menu to item list...');
+        
+        try {
+            // Wait for Zotero to be fully loaded
+            if (!Zotero.ItemTreeView) {
+                this.log('Zotero.ItemTreeView not available, retrying...');
+                setTimeout(() => this.addItemListContextMenu(), 1000);
+                return;
+            }
+
+            // Register context menu observer
+            this.setupContextMenuObserver();
+            
+            this.log('✅ Item list context menu setup completed');
+            
+        } catch (error) {
+            this.log('❌ Failed to setup item list context menu:', error.message);
+        }
+    },
+
+    // Setup context menu observer
+    setupContextMenuObserver() {
+        try {
+            // Monitor when context menus are created
+            const originalShowContextMenu = Zotero.ItemTreeView.prototype._showContextMenu;
+            
+            if (originalShowContextMenu) {
+                Zotero.ItemTreeView.prototype._showContextMenu = function(event) {
+                    // Call original function first
+                    const result = originalShowContextMenu.call(this, event);
+                    
+                    try {
+                        // Add our RefSense menu item
+                        RefSense.Plugin.addRefSenseContextMenuItem(this, event);
+                    } catch (error) {
+                        RefSense.Plugin.log('Error adding RefSense context menu item:', error.message);
+                    }
+                    
+                    return result;
+                };
+                
+                this.log('✅ Context menu observer registered');
+            } else {
+                this.log('⚠️ Could not find _showContextMenu method');
+            }
+            
+        } catch (error) {
+            this.log('❌ Failed to setup context menu observer:', error.message);
+        }
+    },
+
+    // Add RefSense menu item to context menu
+    addRefSenseContextMenuItem(itemTreeView, event) {
+        try {
+            // Get selected items
+            const selectedItems = itemTreeView.getSelectedItems();
+            if (!selectedItems || selectedItems.length === 0) {
+                return;
+            }
+
+            // Check if any selected item is a PDF attachment without parent
+            const pdfAttachmentsWithoutParent = selectedItems.filter(item => {
+                return this.isPDFAttachmentWithoutParent(item);
+            });
+
+            if (pdfAttachmentsWithoutParent.length === 0) {
+                return;
+            }
+
+            // Find the context menu popup
+            const contextMenu = event.target.ownerDocument.getElementById('zotero-itemmenu');
+            if (!contextMenu) {
+                this.log('Context menu popup not found');
+                return;
+            }
+
+            // Check if our menu item already exists
+            let refSenseMenuItem = contextMenu.querySelector('#refsense-extract-metadata');
+            if (refSenseMenuItem) {
+                // Update visibility
+                refSenseMenuItem.hidden = false;
+                return;
+            }
+
+            // Create RefSense menu item
+            refSenseMenuItem = event.target.ownerDocument.createElementNS(
+                'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul', 
+                'menuitem'
+            );
+            
+            refSenseMenuItem.id = 'refsense-extract-metadata';
+            refSenseMenuItem.setAttribute('label', '📄 RefSense: 서지정보 추출');
+            refSenseMenuItem.setAttribute('tooltiptext', 'AI를 사용해 PDF에서 서지정보를 추출하여 parent item을 생성합니다');
+            
+            // Add event listener
+            refSenseMenuItem.addEventListener('command', () => {
+                this.handleContextMenuAction(pdfAttachmentsWithoutParent);
+            });
+
+            // Find appropriate position (after "Show File" if it exists)
+            const showFileItem = contextMenu.querySelector('[label*="Show File"], [label*="파일 보기"]');
+            if (showFileItem) {
+                contextMenu.insertBefore(refSenseMenuItem, showFileItem.nextSibling);
+            } else {
+                // Insert at the beginning
+                contextMenu.insertBefore(refSenseMenuItem, contextMenu.firstChild);
+            }
+
+            // Add separator if needed
+            let separator = contextMenu.querySelector('#refsense-separator');
+            if (!separator) {
+                separator = event.target.ownerDocument.createElementNS(
+                    'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul', 
+                    'menuseparator'
+                );
+                separator.id = 'refsense-separator';
+                contextMenu.insertBefore(separator, refSenseMenuItem.nextSibling);
+            }
+
+            this.log(`✅ Added RefSense context menu item for ${pdfAttachmentsWithoutParent.length} PDF(s)`);
+
+        } catch (error) {
+            this.log('❌ Failed to add RefSense context menu item:', error.message);
+        }
+    },
+
+    // Check if item is PDF attachment without parent
+    isPDFAttachmentWithoutParent(item) {
+        try {
+            if (!item) return false;
+
+            // Check if it's an attachment
+            if (!item.isAttachment()) return false;
+
+            // Check if it's a PDF
+            if (item.attachmentContentType !== 'application/pdf') return false;
+
+            // Check if it has no parent item
+            const hasParent = item.parentItemID && item.parentItemID > 0;
+            
+            this.log(`Item ${item.id} PDF check:`, {
+                isAttachment: item.isAttachment(),
+                contentType: item.attachmentContentType,
+                parentItemID: item.parentItemID,
+                hasParent: hasParent
+            });
+
+            return !hasParent;
+
+        } catch (error) {
+            this.log('Error checking PDF attachment status:', error.message);
+            return false;
+        }
+    },
+
+    // Handle context menu action
+    async handleContextMenuAction(pdfItems) {
+        try {
+            this.log(`🔄 Handling context menu action for ${pdfItems.length} PDF(s)`);
+
+            // If multiple PDFs selected, ask user which one to process
+            let targetItem = pdfItems[0];
+            if (pdfItems.length > 1) {
+                targetItem = await this.selectPDFFromMultiple(pdfItems);
+                if (!targetItem) {
+                    this.log('User cancelled PDF selection');
+                    return;
+                }
+            }
+
+            // Process the selected PDF using existing workflow
+            await this.processPDFItem(targetItem);
+
+        } catch (error) {
+            this.log('❌ Context menu action failed:', error.message);
+            this.showError('RefSense 오류', `처리 중 오류가 발생했습니다: ${error.message}`);
+        }
+    },
+
+    // Select PDF from multiple options
+    async selectPDFFromMultiple(pdfItems) {
+        return new Promise((resolve) => {
+            try {
+                const options = pdfItems.map((item, index) => {
+                    const filename = item.getField('title') || item.getDisplayTitle() || `PDF ${index + 1}`;
+                    return `${index + 1}. ${filename}`;
+                }).join('\n');
+
+                const choice = Services.prompt.select(
+                    null,
+                    'RefSense PDF 선택',
+                    `처리할 PDF를 선택하세요:\n\n${options}`,
+                    pdfItems.length,
+                    pdfItems.map((item, index) => {
+                        const filename = item.getField('title') || item.getDisplayTitle() || `PDF ${index + 1}`;
+                        return filename;
+                    }),
+                    {}
+                );
+
+                if (choice.value >= 0) {
+                    resolve(pdfItems[choice.value]);
+                } else {
+                    resolve(null);
+                }
+
+            } catch (error) {
+                this.log('Error in PDF selection dialog:', error.message);
+                resolve(pdfItems[0]); // Fallback to first item
+            }
+        });
+    },
+
+    // Process PDF item (similar to reader-based processing)
+    async processPDFItem(pdfItem) {
+        try {
+            this.log(`🔄 Processing PDF item: ${pdfItem.id}`);
+
+            // Create a pseudo-reader object for consistency with existing workflow
+            const pseudoReader = {
+                itemID: pdfItem.id,
+                _isContextMenu: true,  // Flag to identify context menu calls
+                pdfItem: pdfItem
+            };
+
+            // Use existing extraction workflow
+            await this.handleExtractMetadata(pseudoReader);
+
+        } catch (error) {
+            this.log('❌ Failed to process PDF item:', error.message);
+            throw error;
+        }
     }
 };
 

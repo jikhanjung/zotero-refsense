@@ -2,7 +2,7 @@
   "name": "zotero-refsense",
   "version": "1.0.0",
   "description": "Zotero plugin for AI-powered bibliographic metadata extraction from PDF files",
-  "main": "src/bootstrap.js",
+  "main": "bootstrap.js",
   "scripts": {
     "build": "node build.js",
     "dev": "node build.js --dev",
