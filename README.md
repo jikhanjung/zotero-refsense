@@ -22,11 +22,13 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 - **Fallback System**: Comprehensive text extraction with quality verification
 
 ### 🧠 **Intelligent Parent Item Management**
-- **Duplicate Detection**: Checks for existing parent items
-- **Smart Update Options**: 3-choice dialog (Update/Create New/Cancel)
-- **Field-by-Field Comparison**: Visual side-by-side metadata comparison
+- **Smart Button Display**: RefSense button only appears for PDFs without parent items
+- **Duplicate Detection**: Checks for existing parent items using DOI and title matching
+- **Smart Update Options**: 3-choice dialog (Update/Create New/Cancel) when parent exists
+- **Field-by-Field Comparison**: Visual side-by-side metadata comparison with color coding
 - **Selective Updates**: Choose which fields to update with radio buttons
 - **Batch Operations**: "Select All Existing" or "Select All New" options
+- **Fallback System**: Native dialog support when DOM access fails
 
 ### 📥 **Seamless Zotero Integration**
 - **Automatic Parent Creation**: Generate Zotero items with extracted metadata
@@ -35,10 +37,12 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 - **Field Mapping**: Complete mapping to Zotero fields (title, authors, year, journal, DOI, etc.)
 
 ### ⚙️ **Comprehensive Settings**
-- **Dynamic UI**: Backend-specific settings sections
-- **API Key Management**: Secure Base64 encoding and masking
-- **Connection Testing**: Validate API connectivity
-- **Model Selection**: Choose from available AI models
+- **CSP-Compatible Settings**: Prompt-based configuration system that works with Zotero's security policies
+- **Dynamic UI**: Backend-specific settings sections that show/hide based on selection
+- **API Key Management**: Secure Base64 encoding, masking, and preservation of existing values
+- **Connection Testing**: Validate API connectivity and model availability
+- **Model Selection**: Choose from available AI models with automatic detection
+- **Step-by-Step Configuration**: User-friendly guided setup process
 
 ## 🚀 Quick Start
 
@@ -52,27 +56,31 @@ A powerful Zotero 7 plugin that extracts bibliographic metadata from PDF files u
 
 ### Configuration
 
-1. Go to **Tools → Add-ons → RefSense → Options**
-2. Choose your AI backend (OpenAI or Ollama)
-3. Configure API keys and model settings
+1. Go to **Tools → Add-ons → RefSense → Options** (or **Tools → RefSense Settings**)
+2. The settings dialog will guide you through configuration:
+   - Choose your AI backend (OpenAI or Ollama)
+   - Enter API keys (securely masked and encoded)
+   - Select models from available options
+   - Configure page extraction preferences
+3. Each setting includes validation and helpful prompts
 4. Test connection to ensure everything works
 
 ### Basic Usage
 
-1. **Open a PDF** in Zotero's PDF reader
-2. **Click the RefSense button** (📄) or press **Ctrl+Shift+E**
-3. **Wait for AI processing** - metadata will be extracted automatically
-4. **Choose your action**:
-   - If no parent exists: Review and confirm metadata
-   - If parent exists: Choose to update, create new, or cancel
-5. **For updates**: Use the comparison dialog to select which fields to update
-6. **Confirm** - parent item will be created or updated
+1. **Open a PDF** in Zotero's PDF reader (must be a PDF without existing parent item)
+2. **Look for the RefSense button** (📄) in the top-right corner, or press **Ctrl+Shift+E**
+3. **Click the button** - AI processing will start automatically
+4. **Wait for extraction** - the plugin uses 6 different methods to extract text and validate quality
+5. **Review metadata** - a preview dialog shows the extracted bibliographic information
+6. **Confirm creation** - a new parent item will be created and linked to your PDF
+
+**Note**: The RefSense button only appears for PDFs that don't already have parent items, keeping your interface clean and focused.
 
 ## 🔧 Advanced Features
 
 ### Field-by-Field Metadata Comparison
 
-When updating existing parent items, RefSense shows a detailed comparison dialog:
+When a PDF already has a parent item (rare cases where button appears), RefSense shows a detailed comparison dialog:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -171,12 +179,13 @@ zotero-refsense/
 
 ## 🔍 How It Works
 
-1. **PDF Text Extraction**: Uses 6 different methods including Zotero's Fulltext API, cache files, and database queries
-2. **Quality Validation**: Filters binary content and scores academic relevance
-3. **AI Processing**: Sends optimized prompts to chosen AI backend
-4. **Metadata Parsing**: Converts AI JSON response to Zotero fields
-5. **Smart Handling**: Detects existing parents and offers intelligent update options
-6. **Database Integration**: Uses Zotero's transaction system for data integrity
+1. **Smart Button Logic**: Only displays RefSense button for PDFs without existing parent items
+2. **PDF Text Extraction**: Uses 6 different methods including Zotero's Fulltext API, cache files, and database queries
+3. **Quality Validation**: Filters binary content and scores academic relevance to ensure good text quality
+4. **AI Processing**: Sends optimized prompts to chosen AI backend (OpenAI GPT-4 or local Ollama)
+5. **Metadata Parsing**: Converts AI JSON response to Zotero fields with validation and error handling
+6. **Parent Creation**: Creates new parent items and establishes proper PDF relationships
+7. **Database Integration**: Uses Zotero's transaction system for data integrity with rollback support
 
 ## 🤝 Contributing
 
@@ -205,14 +214,23 @@ MIT License - see LICENSE file for details.
 - **API Keys**: Stored locally with Base64 encoding
 - **No Tracking**: No usage analytics or data collection
 
-## 🎯 Roadmap
+## 🎯 Status & Roadmap
 
+### ✅ **Current Status: Production Ready**
+RefSense is a **complete, fully functional plugin** with all core features implemented:
+- End-to-end PDF → AI → Parent item workflow
+- Robust error handling and fallback systems
+- CSP-compatible settings system
+- Smart UI that adapts to PDF status
+- Production-ready stability and performance
+
+### 🔮 **Future Enhancements (Optional)**
+- [ ] Additional error handling and user experience improvements
 - [ ] Batch processing for multiple PDFs
 - [ ] Advanced duplicate detection across entire library
 - [ ] Custom field mapping options
 - [ ] Integration with additional AI providers
-- [ ] Enhanced OCR capabilities
-- [ ] Multi-language support
+- [ ] Multi-language interface support
 
 ---
 
