@@ -1954,6 +1954,12 @@ RefSense.Plugin = {
         try {
             this.log('Attempting text extraction from page:', pageNumber);
             
+            // For context menu calls, use a simplified approach
+            if (reader._isContextMenu) {
+                this.log('Context menu call detected - using simplified extraction');
+                return await this.extractTextForContextMenu(reader, pageNumber);
+            }
+            
             // Try multiple text extraction methods in priority order
             const extractionMethods = [
                 { name: '1. Zotero Fulltext API', func: () => this.extractViaZoteroAPI(reader, pageNumber) },
@@ -1997,6 +2003,188 @@ RefSense.Plugin = {
             this.log('Text extraction error:', error.message);
         }
         
+        return result;
+    },
+
+    // Context menu specific text extraction
+    async extractTextForContextMenu(reader, pageNumber) {
+        const result = {
+            success: false,
+            text: '',
+            error: null
+        };
+
+        try {
+            this.log('=== Context Menu Text Extraction ===');
+            
+            // Get PDF item from reader
+            const pdfItem = reader.pdfItem || (await Zotero.Items.getAsync(reader.itemID));
+            if (!pdfItem) {
+                throw new Error('Could not find PDF item');
+            }
+
+            // Get attachment file path
+            const filePath = await pdfItem.getFilePathAsync();
+            if (!filePath) {
+                throw new Error('Could not get PDF file path');
+            }
+
+            this.log('PDF file path:', filePath);
+
+            // Method 1: Try to read .zotero-ft-cache file first
+            const cacheResult = await this.extractFromZoteroCache(filePath);
+            if (cacheResult.success && cacheResult.text && cacheResult.text.length > 50) {
+                this.log('✅ Cache file extraction successful, length:', cacheResult.text.length);
+                return cacheResult;
+            }
+
+            // Method 2: Try Zotero Fulltext API for this specific item
+            const fulltextResult = await this.extractViaZoteroAPI(reader, pageNumber);
+            if (fulltextResult.success && fulltextResult.text && fulltextResult.text.length > 50) {
+                this.log('✅ Zotero API extraction successful, length:', fulltextResult.text.length);
+                return fulltextResult;
+            }
+
+            // Method 3: Force fulltext indexing and retry
+            const indexingResult = await this.forceFulltextIndexing(pdfItem);
+            if (indexingResult.success && indexingResult.text && indexingResult.text.length > 50) {
+                this.log('✅ Forced indexing extraction successful, length:', indexingResult.text.length);
+                return indexingResult;
+            }
+
+            // If all methods fail, return error
+            result.error = 'All context menu extraction methods failed';
+            this.log('❌ All context menu extraction methods failed');
+
+        } catch (error) {
+            result.error = error.message;
+            this.log('❌ Context menu extraction error:', error.message);
+        }
+
+        return result;
+    },
+
+    // Extract text from .zotero-ft-cache file
+    async extractFromZoteroCache(filePath) {
+        const result = { success: false, text: '', error: null };
+
+        try {
+            this.log('=== Zotero Cache File Extraction ===');
+            
+            // Get directory of PDF file
+            const fileDir = filePath.substring(0, filePath.lastIndexOf('/')) || 
+                           filePath.substring(0, filePath.lastIndexOf('\\'));
+            
+            const cacheFilePath = `${fileDir}/.zotero-ft-cache`;
+            this.log('Cache file path:', cacheFilePath);
+
+            // Check if cache file exists and read it
+            if (typeof IOUtils !== 'undefined') {
+                try {
+                    const cacheExists = await IOUtils.exists(cacheFilePath);
+                    if (cacheExists) {
+                        const cacheData = await IOUtils.readUTF8(cacheFilePath);
+                        if (cacheData && cacheData.trim().length > 50) {
+                            result.success = true;
+                            result.text = cacheData.trim();
+                            this.log('✅ Cache file read successfully, length:', result.text.length);
+                            this.log('📄 Cache text preview:', result.text.substring(0, 200));
+                            return result;
+                        } else {
+                            this.log('⚠️ Cache file exists but content is too short');
+                        }
+                    } else {
+                        this.log('⚠️ Cache file does not exist');
+                    }
+                } catch (ioError) {
+                    this.log('❌ IOUtils cache read error:', ioError.message);
+                }
+            }
+
+            // Try alternative file reading methods
+            if (typeof Components !== 'undefined' && Components.classes) {
+                try {
+                    const file = Components.classes["@mozilla.org/file/local;1"]
+                                          .createInstance(Components.interfaces.nsIFile);
+                    file.initWithPath(cacheFilePath);
+                    
+                    if (file.exists() && file.isFile()) {
+                        const fileStream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+                                                   .createInstance(Components.interfaces.nsIFileInputStream);
+                        const converterStream = Components.classes["@mozilla.org/intl/converter-input-stream;1"]
+                                                         .createInstance(Components.interfaces.nsIConverterInputStream);
+                        
+                        fileStream.init(file, -1, 0, 0);
+                        converterStream.init(fileStream, "UTF-8", 0, 0);
+                        
+                        let str = {};
+                        let content = '';
+                        while (converterStream.readString(4096, str) !== 0) {
+                            content += str.value;
+                        }
+                        
+                        converterStream.close();
+                        fileStream.close();
+                        
+                        if (content && content.trim().length > 50) {
+                            result.success = true;
+                            result.text = content.trim();
+                            this.log('✅ nsIFile cache read successful, length:', result.text.length);
+                            return result;
+                        }
+                    } else {
+                        this.log('⚠️ Cache file not found via nsIFile');
+                    }
+                } catch (nsError) {
+                    this.log('❌ nsIFile cache read error:', nsError.message);
+                }
+            }
+
+            result.error = 'Cache file not found or empty';
+            
+        } catch (error) {
+            result.error = error.message;
+            this.log('❌ Cache extraction error:', error.message);
+        }
+
+        return result;
+    },
+
+    // Force fulltext indexing for specific item
+    async forceFulltextIndexing(pdfItem) {
+        const result = { success: false, text: '', error: null };
+
+        try {
+            this.log('=== Force Fulltext Indexing ===');
+
+            // Trigger fulltext indexing
+            if (Zotero.Fulltext && typeof Zotero.Fulltext.indexPDF === 'function') {
+                this.log('Triggering PDF indexing...');
+                await Zotero.Fulltext.indexPDF(pdfItem);
+                
+                // Wait a bit for indexing to complete
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                // Try to get fulltext after indexing
+                if (typeof Zotero.Fulltext.getIndexedText === 'function') {
+                    const indexedText = await Zotero.Fulltext.getIndexedText(pdfItem.id);
+                    if (indexedText && indexedText.length > 50) {
+                        result.success = true;
+                        result.text = indexedText;
+                        this.log('✅ Forced indexing successful, length:', result.text.length);
+                        return result;
+                    }
+                }
+            }
+
+            result.error = 'Forced indexing failed';
+            this.log('❌ Forced indexing failed');
+
+        } catch (error) {
+            result.error = error.message;
+            this.log('❌ Forced indexing error:', error.message);
+        }
+
         return result;
     },
     
@@ -6351,73 +6539,234 @@ ${text.substring(0, 3000)}
     },
 
     // Add context menu to item list
-    addItemListContextMenu() {
-        this.log('Adding context menu to item list...');
+    addItemListContextMenu(attempt = 1, maxAttempts = 10) {
+        this.log(`Adding context menu to item list... (attempt ${attempt}/${maxAttempts})`);
         
         try {
-            // Wait for Zotero to be fully loaded
-            if (!Zotero.ItemTreeView) {
-                this.log('Zotero.ItemTreeView not available, retrying...');
-                setTimeout(() => this.addItemListContextMenu(), 1000);
+            // Check multiple approaches for Zotero 7 compatibility
+            const hasItemTreeView = Zotero.ItemTreeView && typeof Zotero.ItemTreeView === 'function';
+            const hasMainWindow = Zotero.getMainWindow && Zotero.getMainWindow();
+            
+            this.log(`ItemTreeView available: ${hasItemTreeView}, MainWindow available: ${!!hasMainWindow}`);
+            
+            if (!hasItemTreeView && !hasMainWindow) {
+                if (attempt < maxAttempts) {
+                    this.log('Zotero components not ready, retrying...');
+                    setTimeout(() => this.addItemListContextMenu(attempt + 1, maxAttempts), 1000);
+                } else {
+                    this.log('❌ Zotero components not available after maximum attempts - trying direct approach');
+                    // Still try the alternative setup
+                    this.setupAlternativeContextMenu();
+                }
                 return;
             }
 
-            // Register context menu observer
-            this.setupContextMenuObserver();
+            // Try primary method first, fallback to alternative
+            if (hasItemTreeView) {
+                this.setupContextMenuObserver();
+            } else {
+                this.log('Using alternative context menu setup...');
+                this.setupAlternativeContextMenu();
+            }
             
             this.log('✅ Item list context menu setup completed');
             
         } catch (error) {
             this.log('❌ Failed to setup item list context menu:', error.message);
+            // Try alternative as fallback
+            this.setupAlternativeContextMenu();
         }
     },
 
     // Setup context menu observer
     setupContextMenuObserver() {
         try {
+            // Check if ItemTreeView has the expected method
+            if (!Zotero.ItemTreeView.prototype._showContextMenu) {
+                this.log('⚠️ Could not find _showContextMenu method, trying alternative approach...');
+                
+                // Alternative: Try to hook into the popup showing event
+                this.setupAlternativeContextMenu();
+                return;
+            }
+            
             // Monitor when context menus are created
             const originalShowContextMenu = Zotero.ItemTreeView.prototype._showContextMenu;
             
-            if (originalShowContextMenu) {
-                Zotero.ItemTreeView.prototype._showContextMenu = function(event) {
-                    // Call original function first
-                    const result = originalShowContextMenu.call(this, event);
-                    
-                    try {
-                        // Add our RefSense menu item
-                        RefSense.Plugin.addRefSenseContextMenuItem(this, event);
-                    } catch (error) {
-                        RefSense.Plugin.log('Error adding RefSense context menu item:', error.message);
-                    }
-                    
-                    return result;
-                };
+            Zotero.ItemTreeView.prototype._showContextMenu = function(event) {
+                // Call original function first
+                const result = originalShowContextMenu.call(this, event);
                 
-                this.log('✅ Context menu observer registered');
-            } else {
-                this.log('⚠️ Could not find _showContextMenu method');
-            }
+                try {
+                    // Add our RefSense menu item
+                    RefSense.Plugin.addRefSenseContextMenuItem(this, event);
+                } catch (error) {
+                    RefSense.Plugin.log('Error adding RefSense context menu item:', error.message);
+                }
+                
+                return result;
+            };
+            
+            this.log('✅ Context menu observer registered');
             
         } catch (error) {
             this.log('❌ Failed to setup context menu observer:', error.message);
+            this.log('Trying alternative approach...');
+            this.setupAlternativeContextMenu();
+        }
+    },
+
+    // Alternative context menu setup method
+    setupAlternativeContextMenu() {
+        try {
+            this.log('Setting up alternative context menu approach...');
+            
+            // Wait for main window and try to find item tree
+            const mainWindow = Zotero.getMainWindow();
+            if (!mainWindow) {
+                this.log('Main window not available, retrying in 2 seconds...');
+                setTimeout(() => this.setupAlternativeContextMenu(), 2000);
+                return;
+            }
+
+            const doc = mainWindow.document;
+            
+            // Try multiple selectors for the item tree in Zotero 7
+            const selectors = [
+                '#zotero-items-tree',
+                '#item-tree',
+                'item-tree',
+                '[id*="item"][id*="tree"]',
+                '.virtualized-table'
+            ];
+            
+            let itemTree = null;
+            for (const selector of selectors) {
+                itemTree = doc.querySelector(selector);
+                if (itemTree) {
+                    this.log(`Found item tree with selector: ${selector}`);
+                    break;
+                }
+            }
+            
+            if (itemTree) {
+                // Add event listener for context menu with better timing
+                itemTree.addEventListener('contextmenu', (event) => {
+                    // Use setTimeout instead of requestAnimationFrame (not available in all contexts)
+                    setTimeout(() => {
+                        try {
+                            this.handleAlternativeContextMenu(event);
+                        } catch (error) {
+                            this.log('Error in alternative context menu handler:', error.message);
+                        }
+                    }, 100);
+                });
+                
+                // Also try to hook into the popup menu directly
+                const contextMenu = doc.getElementById('zotero-itemmenu');
+                if (contextMenu) {
+                    contextMenu.addEventListener('popupshowing', (event) => {
+                        try {
+                            this.handleContextMenuPopup(event);
+                        } catch (error) {
+                            this.log('Error in context menu popup handler:', error.message);
+                        }
+                    });
+                    this.log('✅ Hooked into context menu popup event');
+                }
+                
+                this.log('✅ Alternative context menu setup completed');
+            } else {
+                this.log('⚠️ Could not find item tree element with any selector');
+                this.log('Available elements:', [...doc.querySelectorAll('[id*="tree"], [id*="item"]')].map(el => el.id || el.tagName));
+            }
+            
+        } catch (error) {
+            this.log('❌ Alternative context menu setup failed:', error.message);
+        }
+    },
+
+    // Handle context menu popup event
+    handleContextMenuPopup(event) {
+        try {
+            this.log('Context menu popup showing...');
+            
+            const mainWindow = Zotero.getMainWindow();
+            if (!mainWindow) return;
+
+            // Get currently selected items
+            const zoteroPane = mainWindow.ZoteroPane;
+            if (zoteroPane && zoteroPane.getSelectedItems) {
+                const selectedItems = zoteroPane.getSelectedItems();
+                this.log(`Selected items count: ${selectedItems.length}`);
+                
+                // Check for PDFs without parent
+                const pdfAttachmentsWithoutParent = selectedItems.filter(item => {
+                    return this.isPDFAttachmentWithoutParent(item);
+                });
+
+                this.log(`PDF attachments without parent: ${pdfAttachmentsWithoutParent.length}`);
+
+                if (pdfAttachmentsWithoutParent.length > 0) {
+                    this.addRefSenseContextMenuItem(null, event, pdfAttachmentsWithoutParent);
+                }
+            }
+            
+        } catch (error) {
+            this.log('Error in context menu popup handler:', error.message);
+        }
+    },
+
+    // Handle alternative context menu
+    handleAlternativeContextMenu(event) {
+        try {
+            const mainWindow = Zotero.getMainWindow();
+            if (!mainWindow) return;
+
+            const doc = mainWindow.document;
+            const contextMenu = doc.getElementById('zotero-itemmenu');
+            
+            if (contextMenu && contextMenu.state === 'open') {
+                // Get currently selected items
+                const zoteroPane = mainWindow.ZoteroPane;
+                if (zoteroPane && zoteroPane.getSelectedItems) {
+                    const selectedItems = zoteroPane.getSelectedItems();
+                    
+                    // Check for PDFs without parent
+                    const pdfAttachmentsWithoutParent = selectedItems.filter(item => {
+                        return this.isPDFAttachmentWithoutParent(item);
+                    });
+
+                    if (pdfAttachmentsWithoutParent.length > 0) {
+                        this.addRefSenseContextMenuItem(null, { target: { ownerDocument: doc } }, pdfAttachmentsWithoutParent);
+                    }
+                }
+            }
+            
+        } catch (error) {
+            this.log('Error in alternative context menu handler:', error.message);
         }
     },
 
     // Add RefSense menu item to context menu
-    addRefSenseContextMenuItem(itemTreeView, event) {
+    addRefSenseContextMenuItem(itemTreeView, event, pdfItems = null) {
         try {
-            // Get selected items
-            const selectedItems = itemTreeView.getSelectedItems();
-            if (!selectedItems || selectedItems.length === 0) {
-                return;
+            let pdfAttachmentsWithoutParent = pdfItems;
+            
+            // If no PDF items provided, get them from itemTreeView
+            if (!pdfAttachmentsWithoutParent && itemTreeView) {
+                const selectedItems = itemTreeView.getSelectedItems();
+                if (!selectedItems || selectedItems.length === 0) {
+                    return;
+                }
+
+                // Check if any selected item is a PDF attachment without parent
+                pdfAttachmentsWithoutParent = selectedItems.filter(item => {
+                    return this.isPDFAttachmentWithoutParent(item);
+                });
             }
 
-            // Check if any selected item is a PDF attachment without parent
-            const pdfAttachmentsWithoutParent = selectedItems.filter(item => {
-                return this.isPDFAttachmentWithoutParent(item);
-            });
-
-            if (pdfAttachmentsWithoutParent.length === 0) {
+            if (!pdfAttachmentsWithoutParent || pdfAttachmentsWithoutParent.length === 0) {
                 return;
             }
 
